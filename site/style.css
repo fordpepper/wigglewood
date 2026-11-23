@@ -88,6 +88,7 @@ button { font: inherit; color: inherit; }
 .btn:hover { transform: translate(-1px, -1px) rotate(-1deg); box-shadow: 4px 5px 0 var(--ink); }
 .btn:active { transform: translate(2px, 3px); box-shadow: 1px 1px 0 var(--ink); }
 .btn-main { background: var(--dumpling); }
+.btn:disabled { background: #eeeeee; color: #8a8a8a; box-shadow: none; transform: none; cursor: default; }
 .btn-round { width: 44px; padding-left: 0; padding-right: 0; border-radius: 50%; }
 .btn[aria-pressed="true"], .btn.on { background: #b8ecff; }
 
@@ -195,7 +196,7 @@ button.count:hover { transform: rotate(-1deg); }
 /* ---------- panels ---------- */
 .panel {
   top: 50%; left: 50%;
-  transform: translate(-50%, -50%) rotate(-0.4deg);
+  transform: translate(-50%, -50%);
   width: min(640px, calc(100vw - 24px));
   max-height: calc(100dvh - 40px);
   overflow: auto;

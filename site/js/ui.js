@@ -150,7 +150,8 @@ export function syncFollow(a) {
 
 let deadInfo = null;
 export function onSelectedDied(a, f) {
-  const g = a.w.graves[a.w.graves.length - 1];
+  const name = $('c-name').textContent;
+  const g = a.w.graves.find(g => g.t === a.w.tick && g.n === name) || a.w.graves[a.w.graves.length - 1];
   deadInfo = g;
   a.following = false;
   syncFollow(a);
@@ -162,6 +163,9 @@ function updateCard() {
     if (deadInfo) {
       $('c-status').textContent = deadInfo.cause === 'eaten' ? `Was eaten by ${deadInfo.by}.` : deadInfo.cause === 'starved' ? 'Ran out of food.' : 'Passed away peacefully of old age.';
       $('btn-follow').disabled = true;
+      $('c-energy').style.width = '0%';
+      const kind = $('c-kind').textContent;
+      if (!kind.startsWith('The late')) $('c-kind').textContent = `The late ${kind.replace(', still a baby', '').toLowerCase()}`;
     }
     return;
   }

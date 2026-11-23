@@ -213,10 +213,14 @@ function addParticle(p) {
   if (app.particles.length > 400) app.particles.shift();
 }
 
+let idMap = null, idMapTick = -1, idMapList = null;
 function byId(id) {
-  const list = app.w.creatures;
-  for (let i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
-  return null;
+  if (idMapTick !== app.w.tick || idMapList !== app.w.creatures) {
+    idMap = new Map();
+    for (const c of app.w.creatures) idMap.set(c.id, c);
+    idMapTick = app.w.tick; idMapList = app.w.creatures;
+  }
+  return idMap.get(id) || null;
 }
 
 // ---------------------------------------------------------------------------
