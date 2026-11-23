@@ -385,7 +385,7 @@ export function growth(c) { return 0.55 + 0.45 * Math.min(1, c.age / SPECIES[c.s
 export function radius(c) { return SPECIES[c.s].radius * c.g[G_SIZE] * growth(c); }
 export function maxEnergy(c) { return SPECIES[c.s].maxEnergy * c.g[G_SIZE]; }
 export function sightOf(c) { return SPECIES[c.s].sight * c.g[G_SIGHT]; }
-export function speedOf(c) { return SPECIES[c.s].speed * c.g[G_SPEED] * (0.75 + 0.25 * growth(c)) * (0.85 + 0.15 * c.g[G_SIZE]); }
+export function speedOf(c) { return SPECIES[c.s].speed * c.g[G_SPEED] * (0.75 + 0.25 * growth(c)) * (0.65 + 0.35 * c.g[G_SIZE]); }
 export function cost(c) {
   const z = c.g[G_SIZE], v = c.g[G_SPEED], k = c.g[G_SIGHT];
   return 0.3 * z * z * z + 0.45 * v * v * z + 0.25 * k;
@@ -582,8 +582,10 @@ export function step(w) {
           } else if (c.st === ST.GRAZE || rnd(w) < 0.02) {
             // nibble on grass: barely keeps a dumpling going, nothing grows under snow
             const e = elevAt(c.x, c.y);
-            const rate = [0.012, 0.01, 0.006, 0][season];
-            if (rate > 0 && e > LEVEL.SAND && e < LEVEL.HILL && moistAt(c.x, c.y) <= FOREST_MOIST) {
+            // in winter the only greens left are under the trees
+            const forest = moistAt(c.x, c.y) > FOREST_MOIST;
+            const rate = season === 3 ? (forest ? 0.009 : 0) : forest ? 0 : [0.012, 0.01, 0.006][season];
+            if (rate > 0 && e > LEVEL.SAND && e < LEVEL.HILL) {
               if (c.st !== ST.GRAZE) c.lt = 30 + rint(w, 0, 40);
               c.st = ST.GRAZE; moving = false; acted = true;
               c.e = Math.min(maxEnergy(c), c.e + rate);
@@ -637,7 +639,7 @@ export function step(w) {
             const d = steerTo(c, prey.x, prey.y, 0.5);
             if (c.sta > 0) { spd *= 1.55; c.sta -= 1; drainMul = 1.6; }
             if (d < rad + radius(prey) + 2) {
-              const p = clamp(0.6 + (c.g[G_SIZE] * growth(c) - prey.g[G_SIZE] * growth(prey)) * 1.8, 0.15, 0.95);
+              const p = clamp(0.6 + (c.g[G_SIZE] * growth(c) - prey.g[G_SIZE] * growth(prey)) * 2.2, 0.12, 0.95);
               if (rnd(w) < p) {
                 dead.add(prey.id);
                 killed(w, prey, 'eaten', c);
