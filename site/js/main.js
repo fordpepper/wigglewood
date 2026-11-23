@@ -162,6 +162,12 @@ function stepLive() {
     handleFx(app.w.fx, target - app.w.tick < 4);
   }
   if (n) UI.onTick(app);
+  // forget render state of creatures that are gone
+  if (n && app.w.tick % 240 === 0) {
+    const alive = new Set(app.w.creatures.map(c => c.id));
+    for (const m of [app.facing, app.walk, app.look]) for (const id of m.keys()) if (!alive.has(id)) m.delete(id);
+    for (const id of app.seen) if (!alive.has(id)) app.seen.delete(id);
+  }
 }
 
 function handleFx(fx, visible) {
@@ -239,7 +245,10 @@ function updateCamera(dt) {
   if (mx || my) { app.cam.x += mx * pan; app.cam.y += my * pan; app.following = false; app.camTarget = null; UI.syncFollow(app); }
   if (app.following && app.selected >= 0) {
     const p = renderPos(byId(app.selected), alphaNow());
-    if (p) app.camTarget = { x: p[0], y: p[1] - 10, z: app.camTarget && app.camTarget.z };
+    // keep the creature visible above the card on narrow screens
+    const card = document.getElementById('card');
+    const off = !card.hidden && app.W <= 720 ? card.offsetHeight / 2 / app.cam.z : 0;
+    if (p) app.camTarget = { x: p[0], y: p[1] - 10 + off, z: app.camTarget && app.camTarget.z };
   }
   if (app.camTarget) {
     const ease = 1 - Math.pow(0.0025, dt);

@@ -11,7 +11,7 @@ let hoverX = null;
 const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
 const timeFmtSec = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 const dateTimeFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-const dateFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+const dateFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', hour: 'numeric' });
 
 export function init(a, actions) {
   app = a; act = actions;
@@ -376,8 +376,8 @@ export function drawChart() {
     return;
   }
   const defs = SERIES[chartView];
-  const L = 44, R = 64, top = 8, gap = 14;
-  const ph = (H - top - 22 - gap * (defs.length - 1)) / defs.length;
+  const L = 44, R = 64, top = 4, gap = 10, head = 18;
+  const ph = (H - top - 22 - (gap + head) * defs.length + gap) / defs.length;
   const t0 = rows[0][0], t1 = rows[rows.length - 1][0];
   const xOf = t => L + (t - t0) / Math.max(1, t1 - t0) * (W - L - R);
   c.font = '700 13px "Comic Neue", sans-serif';
@@ -392,7 +392,7 @@ export function drawChart() {
   }
 
   defs.forEach((d, k) => {
-    const y0 = top + k * (ph + gap), y1 = y0 + ph;
+    const y0 = top + head + k * (ph + gap + head), y1 = y0 + ph;
     // seasons behind the plot
     for (let s = Math.floor(t0 / S.SEASON_TICKS) * S.SEASON_TICKS; s < t1; s += S.SEASON_TICKS) {
       const a = Math.max(t0, s), b = Math.min(t1, s + S.SEASON_TICKS);
@@ -413,7 +413,7 @@ export function drawChart() {
       c.fillText(d.col ? String(Math.round(v)) : v.toFixed(1), L - 6, y + 4);
     }
     c.textAlign = 'left'; c.fillStyle = '#141414';
-    c.fillText(d.title, L + 6, y0 + 14);
+    c.fillText(d.title, L, y0 - 5);
     const lines = d.col ? [[d.col, null, d.color]] : d.lines;
     for (const [col, label, color] of lines) {
       c.strokeStyle = color; c.lineWidth = 2; c.lineJoin = 'round';
@@ -450,9 +450,10 @@ export function drawChart() {
   c.fillStyle = '#5c5c5c'; c.textAlign = 'center';
   const span = t1 - t0;
   const fmt = span > 20 * 3600 * S.TPS ? dateFmt : timeFmt;
-  for (let i = 0; i <= 4; i++) {
-    const t = t0 + span * i / 4;
-    c.textAlign = i === 0 ? 'left' : i === 4 ? 'right' : 'center';
+  const nTicks = Math.max(1, Math.min(4, Math.floor((W - L - R) / (fmt === dateFmt ? 150 : 90))));
+  for (let i = 0; i <= nTicks; i++) {
+    const t = t0 + span * i / nTicks;
+    c.textAlign = i === 0 ? 'left' : i === nTicks ? 'right' : 'center';
     c.fillText(fmt.format(new Date(S.msAt(t))), xOf(t), H - 5);
   }
   $('chart-note').textContent = chartView === 'pop'
