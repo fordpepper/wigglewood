@@ -289,7 +289,6 @@ function togglePanel(id, btnId) {
     p.hidden = false;
     $(btnId).setAttribute('aria-expanded', 'true');
     if (id === 'graph-panel') { drawChart(); renderStats(); }
-    p.querySelector('.card-close').focus({ preventScroll: true });
   }
 }
 function closePanel(id) {
@@ -425,15 +424,19 @@ export function drawChart() {
         if (!started) { c.moveTo(x, y); started = true; } else c.lineTo(x, y);
       }
       c.stroke();
-      // direct label at the line end
-      const last = rows[rows.length - 1];
-      if (last[col] || d.col) {
-        const y = yOf(last[col]);
-        c.fillStyle = color;
-        c.beginPath(); c.arc(xOf(last[0]), y, 3.5, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#141414';
-        c.fillText(label || String(last[col]), W - R + 8, Math.max(y0 + 10, Math.min(y1, y + 4)));
-      }
+    }
+    // direct labels at the line ends, nudged apart so they never overlap
+    const last = rows[rows.length - 1];
+    const labels = lines.filter(([col]) => last[col] || d.col).map(([col, label, color]) => ({ y: yOf(last[col]), ly: yOf(last[col]) + 4, text: label || String(last[col]), color }));
+    labels.sort((p, q) => p.ly - q.ly);
+    for (let i = 1; i < labels.length; i++) labels[i].ly = Math.max(labels[i].ly, labels[i - 1].ly + 13);
+    const over = labels.length ? labels[labels.length - 1].ly - (y1 + 4) : 0;
+    if (over > 0) labels.forEach(l => { l.ly -= over; });
+    for (const l of labels) {
+      c.fillStyle = l.color;
+      c.beginPath(); c.arc(xOf(last[0]), l.y, 3.5, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#141414';
+      c.fillText(l.text, W - R + 8, Math.max(y0 + 10, l.ly));
     }
     if (hi >= 0) {
       const x = Math.round(xOf(rows[hi][0])) + 0.5;
@@ -458,7 +461,7 @@ export function drawChart() {
   }
   $('chart-note').textContent = chartView === 'pop'
     ? 'Background colour shows the season. Winters are lean: berries barely grow and grass is under snow.'
-    : 'Genes are relative to the first settlers (1.00). Watch which way natural selection pushes them.';
+    : evolutionSummary();
 
   if (hi >= 0) {
     const r = rows[hi];
@@ -475,6 +478,26 @@ export function drawChart() {
     tip.style.left = `${x + 14 + tw > W ? x - tw - 14 : x + 14}px`;
     tip.style.top = '8px';
   } else tip.hidden = true;
+}
+
+// a plain-language summary of how the genes have drifted since the founding
+function evolutionSummary() {
+  const h = app.w.hist;
+  const first = (h.coarse[0] || h.fine[0]), last = h.fine[h.fine.length - 1];
+  if (!first || !last) return '';
+  const describe = (name, cols) => {
+    const words = [['bigger', 'smaller'], ['faster', 'slower'], ['sharper-eyed', 'shorter-sighted']];
+    const parts = [];
+    cols.forEach((col, i) => {
+      if (!first[col] || !last[col]) return;
+      const d = (last[col] - first[col]) / first[col];
+      if (Math.abs(d) >= 0.04) parts.push(`${Math.round(Math.abs(d) * 100)}% ${words[i][d > 0 ? 0 : 1]}`);
+    });
+    if (!parts.length) return `${name} have stayed about the same.`;
+    const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+    return `${name} have become ${list}.`;
+  };
+  return `Since Wigglewood was founded: ${describe('Dumplings', [4, 5, 6])} ${describe('Grumbles', [7, 8, 9])} 1.00 is where the first settlers started.`;
 }
 
 function niceMax(v) {

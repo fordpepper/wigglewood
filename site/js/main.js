@@ -372,7 +372,7 @@ function render(t, dt) {
   }
 
   // emotes and particles on top
-  for (const [c, p] of drawn) drawEmote(c, p, t);
+  if (z * dpr > 0.75) for (const [c, p] of drawn) drawEmote(c, p, t);
   drawParticles(t, dt);
   if (sel) drawNameTag(sel, renderPos(sel, a), true);
   if (app.hover >= 0 && app.hover !== app.selected) {
@@ -440,6 +440,11 @@ function drawCreature(c, p, t, dt) {
   if (!app.seen.has(c.id)) {
     app.seen.add(c.id);
     if (c.age < 40) addParticle({ kind: 'sparkle', x: p[0], y: p[1] - 12, life: 0.9 });
+  }
+  if (S.radius(c) * app.cam.z * app.dpr < 11) {
+    if (c.st === S.ST.SLEEP) o.mood = 'closed';
+    SP.drawTiny(ctx, c, o);
+    return;
   }
   if (c.s === 0) {
     if (c.st === S.ST.SLEEP) o.mood = 'closed';

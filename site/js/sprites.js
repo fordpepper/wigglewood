@@ -85,6 +85,34 @@ function eye(ctx, x, y, r, lookX, lookY, mood, lw) {
 // ---------------------------------------------------------------------------
 // dumpling: a soft gumdrop with big eyes, tiny feet and something on its head
 
+// cheap version for when creatures are only a few pixels tall
+export function drawTiny(ctx, c, o) {
+  const D = c.s === 0;
+  const r = S.SPECIES[c.s].radius * c.g[S.G_SIZE] * (o.growth ?? 1);
+  const col = D ? dumplingColors(c.g) : grumbleColors(c.g);
+  const bob = o.moving ? Math.abs(Math.sin(o.walk * Math.PI)) * r * 0.14 : 0;
+  ctx.fillStyle = 'rgba(20,30,20,0.18)';
+  ellipse(ctx, 0, 0, r, r * 0.35); ctx.fill();
+  const h = D ? r * 1.1 : r * 1.3;
+  ctx.fillStyle = col.body; ctx.strokeStyle = INK; ctx.lineWidth = r * 0.22;
+  ellipse(ctx, 0, -h * 0.75 - bob, r * 1.02, h * 0.78);
+  ctx.fill(); ctx.stroke();
+  if (!D) {
+    ctx.fillStyle = '#f3ead2';
+    ctx.beginPath(); ctx.moveTo(-r * 0.7, -h * 1.4 - bob); ctx.lineTo(-r * 0.4, -h * 1.85 - bob); ctx.lineTo(-r * 0.2, -h * 1.45 - bob);
+    ctx.moveTo(r * 0.7, -h * 1.4 - bob); ctx.lineTo(r * 0.4, -h * 1.85 - bob); ctx.lineTo(r * 0.2, -h * 1.45 - bob); ctx.fill();
+  }
+  if (o.mood !== 'closed') {
+    ctx.fillStyle = '#ffffff';
+    const ex = o.facing * r * 0.3;
+    ellipse(ctx, ex - r * 0.3, -h * 0.95 - bob, r * 0.32, r * 0.34); ctx.fill();
+    ellipse(ctx, ex + r * 0.32, -h * 0.93 - bob, r * 0.3, r * 0.32); ctx.fill();
+    ctx.fillStyle = INK;
+    ellipse(ctx, ex - r * 0.27, -h * 0.95 - bob, r * 0.16, r * 0.17); ctx.fill();
+    ellipse(ctx, ex + r * 0.35, -h * 0.93 - bob, r * 0.15, r * 0.16); ctx.fill();
+  }
+}
+
 export function drawDumpling(ctx, c, o) {
   // o: { t (seconds), walk (0..1 phase), moving, facing (+1/-1), lookX, lookY, mood, alpha }
   const g = c.g;
@@ -342,7 +370,7 @@ function cached(key, x0, y0, x1, y1, draw) {
     draw(cx);
     c.box = [x0, y0, x1 - x0, y1 - y0];
     spriteCache.set(k, c);
-    if (spriteCache.size > 700) spriteCache.delete(spriteCache.keys().next().value);
+    if (spriteCache.size > 320) spriteCache.delete(spriteCache.keys().next().value);
   }
   return c;
 }
@@ -351,11 +379,11 @@ function stamp(ctx, c) { ctx.drawImage(c, c.box[0], c.box[1], c.box[2], c.box[3]
 export function drawTree(ctx, tr, season, t) {
   const kq = Math.round(tr.k * 5) / 5;
   const c = cached(`tree|${tr.kind}|${kq}|${season}`, -50, -96, 50, 14, cx => drawTreeRaw(cx, tr.kind, kq, season));
+  if (renderScale < 1) { stamp(ctx, c); return; } // too small to see the breeze
   const sway = Math.sin(t * 0.8 + tr.x * 0.01) * 0.02;
-  ctx.save();
   ctx.transform(1, 0, sway, 1, 0, 0);
   stamp(ctx, c);
-  ctx.restore();
+  ctx.transform(1, 0, -sway, 1, 0, 0);
 }
 export function drawRock(ctx, rk, season) {
   const kq = Math.round(rk.k * 5) / 5;
