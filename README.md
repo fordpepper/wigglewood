@@ -1,5 +1,9 @@
 # Wigglewood
 
+**[Open the island](https://fordpepper.github.io/wigglewood/)**
+
+![Dumplings and grumbles on the island](site/og.jpg)
+
 A tiny island ecosystem that never stops. Dumplings eat berries, grumbles eat
 dumplings, and both have babies that inherit their parents' genes (size, speed,
 sight, colour, hats) with small mutations, so the island slowly evolves.

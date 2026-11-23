@@ -3,6 +3,14 @@ import * as T from './terrain.js';
 import * as SP from './sprites.js';
 import * as UI from './ui.js';
 
+// older Safari has no roundRect
+if (!CanvasRenderingContext2D.prototype.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+    this.moveTo(x + r, y); this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
+    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r); this.closePath();
+  };
+}
+
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
 
@@ -693,7 +701,7 @@ function drawSky(sun, weather, season) {
 const drops = [];
 function drawWeather(t, dt, weather) {
   const cw = canvas.width, ch = canvas.height, dpr = app.dpr;
-  if (weather !== 'rain' && weather !== 'snow') { drops.length = 0; return; }
+  if ((weather !== 'rain' && weather !== 'snow') || app.reducedMotion) { drops.length = 0; return; }
   const want = Math.round((cw * ch) / (weather === 'rain' ? 9000 : 14000) / dpr);
   while (drops.length < want) drops.push({ x: Math.random() * cw, y: Math.random() * ch, s: 0.6 + Math.random() * 0.8, p: Math.random() * 6 });
   drops.length = Math.min(drops.length, want);
