@@ -47,6 +47,7 @@ setInterval(async () => {
     const mine = app.sums.get(meta.tick);
     if (mine && mine !== meta.checksum) {
       console.warn(`checkpoint ${meta.tick} differs (${mine} here, ${meta.checksum} on GitHub); reloading`);
+      try { localStorage.removeItem(LOCAL_KEY); } catch (e) { /* ignore */ }
       location.reload();
     }
   } catch (e) { /* offline is fine, keep going */ }
@@ -75,6 +76,11 @@ async function boot() {
   } catch (e) {
     console.warn('no snapshot, starting from the beginning of time', e);
   }
+  // a checkpoint this browser saved itself on an earlier visit may be newer
+  // (only trusted if it was made by exactly the same simulation code)
+  app.simHash = await simFingerprint();
+  const mine = loadLocalCheckpoint();
+  if (mine && (!w || mine.tick > w.tick) && mine.tick <= S.tickAt(Date.now())) w = mine;
   if (!w) w = S.genesis();
   app.w = w;
   await catchUp(true);
@@ -91,7 +97,11 @@ function catchUp(first) {
     const start = app.w.tick;
     const tick = () => {
       const target = S.tickAt(Date.now());
-      const done = S.advance(app.w, target, 28, () => performance.now());
+      // stop at checkpoint boundaries so we can remember them
+      const boundary = (Math.floor(app.w.tick / S.CHECKPOINT_TICKS) + 1) * S.CHECKPOINT_TICKS;
+      S.advance(app.w, Math.min(target, boundary), 28, () => performance.now());
+      if (app.w.tick === boundary) saveLocalCheckpoint();
+      const done = app.w.tick >= target;
       const total = Math.max(1, target - start);
       const mins = Math.round((target - start) / S.TPS / 60);
       UI.loaderProgress((app.w.tick - start) / total, first
@@ -122,6 +132,33 @@ async function resync() {
   app.live = true;
   UI.hideLoader();
   resyncing = false;
+}
+
+// ---------------------------------------------------------------------------
+// local checkpoints: returning visitors resume from their own last checkpoint
+// when it is newer than GitHub's, which keeps loading fast even if the Action is late
+
+const LOCAL_KEY = 'wigglewood-checkpoint';
+async function simFingerprint() {
+  try {
+    const src = await (await fetch(new URL('../sim/core.js', import.meta.url))).text();
+    let h = 0x811c9dc5;
+    for (let i = 0; i < src.length; i++) { h ^= src.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(16);
+  } catch (e) { return null; }
+}
+function loadLocalCheckpoint() {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (!raw || !app.simHash) return null;
+    const cut = raw.indexOf('|');
+    if (raw.slice(0, cut) !== app.simHash) return null;
+    return S.deserialize(raw.slice(cut + 1));
+  } catch (e) { return null; }
+}
+function saveLocalCheckpoint() {
+  if (!app.simHash) return;
+  try { localStorage.setItem(LOCAL_KEY, `${app.simHash}|${S.serialize(app.w)}`); } catch (e) { /* full or blocked */ }
 }
 
 function chooseStartView() {
@@ -182,7 +219,7 @@ function stepLive() {
     for (const c of app.w.creatures) app.prev.set(c.id, [c.x, c.y]);
     S.step(app.w);
     n++;
-    if (app.w.tick % S.CHECKPOINT_TICKS === 0) app.sums.set(app.w.tick, S.checksum(app.w));
+    if (app.w.tick % S.CHECKPOINT_TICKS === 0) { app.sums.set(app.w.tick, S.checksum(app.w)); saveLocalCheckpoint(); }
     handleFx(app.w.fx, target - app.w.tick < 4);
   }
   if (n) UI.onTick(app);
