@@ -166,12 +166,21 @@ export function onSelectedDied(a, f) {
 function updateCard() {
   const c = app.w.creatures.find(c => c.id === app.selected);
   if (!c) {
+    if (!deadInfo) {
+      // died while we were fast-forwarding: find its grave
+      const name = $('c-name').textContent;
+      for (let i = app.w.graves.length - 1; i >= 0; i--) if (app.w.graves[i].n === name) { deadInfo = app.w.graves[i]; break; }
+      if (deadInfo) { app.following = false; syncFollow(app); }
+    }
     if (deadInfo) {
       $('c-status').textContent = deadInfo.cause === 'eaten' ? `Was eaten by ${deadInfo.by}.` : deadInfo.cause === 'starved' ? 'Ran out of food.' : 'Passed away peacefully of old age.';
       $('btn-follow').disabled = true;
       $('c-energy').style.width = '0%';
       const kind = $('c-kind').textContent;
       if (!kind.startsWith('The late')) $('c-kind').textContent = `The late ${kind.replace(', still a baby', '').toLowerCase()}`;
+    } else {
+      $('c-status').textContent = 'Is no longer around.';
+      $('btn-follow').disabled = true;
     }
     return;
   }

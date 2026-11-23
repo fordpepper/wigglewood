@@ -195,7 +195,10 @@ function stepLive() {
 }
 
 function handleFx(fx, visible) {
-  if (!visible) return;
+  if (!visible) {
+    for (const f of fx) if (f.k === 'poof' && f.id === app.selected) UI.onSelectedDied(app, f);
+    return;
+  }
   const now = performance.now();
   for (const f of fx) {
     const c = byId(f.id);
