@@ -74,4 +74,14 @@ jobs:
 
       - id: deploy
         if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      # the artifact API is occasionally slow to notice a fresh upload; try once more
+      - name: Wait before retrying the deploy
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 30
+
+      - id: deploy-retry
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v4
