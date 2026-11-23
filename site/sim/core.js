@@ -643,6 +643,7 @@ export function step(w) {
                 killed(w, prey, 'eaten', c);
                 c.e = Math.min(maxEnergy(c), c.e + 50 * prey.g[G_SIZE] * growth(prey));
                 c.kills++;
+                if (c.kills === 20 || c.kills === 40) logEvent(w, 'hunter', `${c.n} the grumble has now caught ${c.kills} dumplings.`, { id: c.id, s: GRUMBLE });
                 c.st = ST.FEAST; c.lt = 24; moving = false;
                 fx.push({ k: 'chomp', id: c.id, x: prey.x, y: prey.y });
               } else {
@@ -703,7 +704,7 @@ export function step(w) {
   if (w.graves.length && w.graves[0].t < tick - 2400) w.graves = w.graves.filter(g => g.t >= tick - 2400);
 
   // migration keeps the world from staying empty
-  if (tick % 2400 === 0) migrate(w);
+  if (tick % 2400 === 0) { migrate(w); tenMinuteNews(w); }
   if (tick % SEASON_TICKS === 0) {
     logEvent(w, 'season', `${cap(SEASONS[seasonIndex(tick)])} arrived in Wigglewood.`);
   }
@@ -728,6 +729,20 @@ function sleepy(w, c, minEnergy) {
     return true;
   }
   return false;
+}
+
+// a few headlines about the last ten minutes
+function tenMinuteNews(w) {
+  const st = w.stats;
+  const last = st.last || { births: st.births, starved: st.starved, eaten: st.eaten };
+  const births = st.births - last.births, starved = st.starved - last.starved, eaten = st.eaten - last.eaten;
+  st.last = { births: st.births, starved: st.starved, eaten: st.eaten };
+  if (w.tick - (st.newsAt ?? -1e9) < 14400) return; // at most one headline an hour
+  let text = null;
+  if (births >= 90) text = `Baby boom! ${births} babies were born in the last ten minutes.`;
+  else if (starved >= 40) text = `Hard times: ${starved} creatures went hungry and didn't make it in the last ten minutes.`;
+  else if (eaten >= 30) text = `The grumbles are feasting: ${eaten} dumplings eaten in ten minutes.`;
+  if (text) { st.newsAt = w.tick; logEvent(w, 'news', text); }
 }
 
 function countSpecies(list, s) { let n = 0; for (const c of list) if (c.s === s) n++; return n; }
