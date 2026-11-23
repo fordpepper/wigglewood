@@ -47,6 +47,12 @@ export function init(a, actions) {
   const snap = app.snapshotTick >= 0 ? `This visit started from the checkpoint saved at ${dateFmt.format(new Date(S.msAt(app.snapshotTick)))}.` : 'No checkpoint was found, so your browser worked out the whole history itself.';
   $('sync-info').textContent = `${snap} Wigglewood was founded on ${new Date(S.EPOCH_MS).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}.`;
   onTick(app);
+  try {
+    if (!localStorage.getItem('wigglewood-hello')) {
+      localStorage.setItem('wigglewood-hello', '1');
+      setTimeout(() => toast('Everyone sees this same island, right now. Click a creature to meet it.', 6000), 900);
+    }
+  } catch (e) { /* storage can be blocked; the hint is optional */ }
   setInterval(updateClock, 1000);
   updateClock();
 }
@@ -209,21 +215,31 @@ function updateCard() {
     ['Age', mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`],
     ['Born', timeFmt.format(new Date(S.msAt(c.born)))],
     ['Parents', c.pn ? null : 'Moved here, no family on the island'],
-    ['Babies', String(c.kids)],
+    ['Babies', null],
     [c.s === 0 ? 'Berries eaten' : 'Dumplings caught', String(c.s === 0 ? c.ate : c.kills)],
   ];
   facts.replaceChildren(...rows.flatMap(([k, v]) => {
     const dt = document.createElement('dt'); dt.textContent = k;
     const dd = document.createElement('dd');
-    if (k === 'Parents' && c.pn) {
+    const link = (id, nm) => {
+      const a = document.createElement('a'); a.textContent = nm; a.href = `#${id}`;
+      a.addEventListener('click', e => { e.preventDefault(); act.select(id, true); });
+      return a;
+    };
+    if (k === 'Babies') {
+      const kids = app.w.creatures.filter(o => o.pa === c.id || o.pb === c.id);
+      dd.append(String(c.kids));
+      if (kids.length) {
+        dd.append(kids.length === c.kids ? ', all still around: ' : `, ${kids.length} still around: `);
+        kids.slice(0, 5).forEach((o, j) => { if (j) dd.append(', '); dd.append(link(o.id, o.n)); });
+        if (kids.length > 5) dd.append(` and ${kids.length - 5} more`);
+      }
+    } else if (k === 'Parents' && c.pn) {
       [[c.pa, c.pn[0]], [c.pb, c.pn[1]]].forEach(([id, nm], j) => {
         if (j) dd.append(' and ');
         const alive = app.w.creatures.some(o => o.id === id);
-        if (alive) {
-          const link = document.createElement('a'); link.textContent = nm; link.href = `#${id}`;
-          link.addEventListener('click', e => { e.preventDefault(); act.select(id, true); });
-          dd.append(link);
-        } else dd.append(`${nm} †`);
+        if (alive) dd.append(link(id, nm));
+        else dd.append(`${nm} †`);
       });
     } else dd.textContent = v;
     return [dt, dd];
@@ -306,11 +322,11 @@ export function closePanels() {
 }
 
 let toastTimer = 0;
-export function toast(msg) {
+export function toast(msg, ms = 3200) {
   const t = $('toast');
   t.textContent = msg; t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
+  toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
 function renderStats() {

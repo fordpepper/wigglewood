@@ -242,7 +242,7 @@ button.count:hover { transform: rotate(-1deg); }
 .toast {
   position: fixed; left: 50%; top: 86px; transform: translateX(-50%);
   background: var(--ink); color: var(--paper); border-radius: 12px; padding: 7px 14px; font-weight: 700;
-  z-index: 20;
+  z-index: 20; max-width: calc(100vw - 32px); text-align: center;
 }
 
 /* ---------- small screens ---------- */
