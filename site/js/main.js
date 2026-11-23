@@ -144,7 +144,7 @@ function chooseStartView() {
 
 function defaultZoom() {
   const short = Math.min(app.W, app.H);
-  return Math.max(minZoom(), Math.min(2.2, short / 560));
+  return Math.max(minZoom(), Math.min(2.2, Math.max(0.95, short / 560)));
 }
 function minZoom() { return Math.min(app.W / (S.WORLD_W + 200), app.H / (S.WORLD_H + 200)); }
 function setZoom(z) { app.cam.z = Math.max(minZoom(), Math.min(4, z)); }

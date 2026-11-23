@@ -258,6 +258,7 @@ button.count:hover { transform: rotate(-1deg); }
   .count canvas { width: 34px; height: 34px; }
   .count span { display: none; }
   .count-berries { height: 44px; }
+  .toast { top: auto; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 150px); }
   .card { left: 12px; right: 12px; width: auto; bottom: 12px; max-height: 58dvh; }
   #portrait { width: 88px; height: 80px; }
   #chart { height: 280px; }
