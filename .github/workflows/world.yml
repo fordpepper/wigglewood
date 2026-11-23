@@ -1,0 +1,77 @@
+name: Keep Wigglewood alive
+
+# Every 15 minutes: load the last checkpoint, simulate up to the latest
+# 30-minute boundary, save it to the `state` branch and publish the site.
+on:
+  schedule:
+    - cron: '4,19,34,49 * * * *'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: wigglewood-world
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the simulation is deterministic
+        run: node scripts/test-determinism.mjs
+
+      - name: Fetch the last checkpoint
+        run: |
+          if git fetch --depth=1 origin state 2>/dev/null; then
+            git show FETCH_HEAD:latest.json > "$RUNNER_TEMP/prev.json"
+            echo "previous checkpoint: $(git show FETCH_HEAD:meta.json)"
+          else
+            echo "no checkpoint yet, the world starts from the beginning"
+          fi
+
+      - name: Advance the world
+        id: advance
+        run: |
+          node scripts/advance.mjs "$RUNNER_TEMP/prev.json" site/state
+          new=$(node -p "require('./site/state/meta.json').tick")
+          old=$( [ -f "$RUNNER_TEMP/prev.json" ] && node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/prev.json','utf8')).tick" || echo -1 )
+          echo "changed=$([ "$new" != "$old" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Save the checkpoint
+        if: steps.advance.outputs.changed == 'true'
+        run: |
+          dir="$RUNNER_TEMP/state"
+          mkdir -p "$dir" && cp site/state/latest.json site/state/meta.json "$dir/"
+          cd "$dir"
+          git init -q -b state
+          git add latest.json meta.json
+          git -c user.name="wigglewood-bot" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qm "Checkpoint at tick $(node -p "require('./meta.json').tick")"
+          git push -fq "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" state
+
+      - uses: actions/configure-pages@v5
+        if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
+
+      - uses: actions/upload-pages-artifact@v3
+        if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
+        with:
+          path: site
+
+      - id: deploy
+        if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Wigglewood</title>
+<meta name="description" content="A tiny shared ecosystem of dumplings and grumbles that keeps living on its own. Everyone who opens it sees the same world.">
+<meta name="theme-color" content="#74caf2">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/comic-neue-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="world" aria-label="The island of Wigglewood, seen from above. Drag to look around, scroll or pinch to zoom, click a creature to meet it."></canvas>
+
+<header class="hud-top">
+  <div class="title-tag">
+    <h1>Wigglewood</h1>
+    <div class="clock">
+      <span id="clock-time">--:--</span>
+      <span id="clock-season" class="chip">spring</span>
+      <span id="clock-weather" class="chip">clear</span>
+    </div>
+  </div>
+  <nav class="buttons">
+    <button id="btn-random" class="btn btn-main" type="button">Meet someone</button>
+    <button id="btn-graph" class="btn" type="button" aria-expanded="false" aria-controls="graph-panel">History</button>
+    <button id="btn-help" class="btn btn-round" type="button" aria-expanded="false" aria-controls="help-panel" aria-label="About Wigglewood">?</button>
+  </nav>
+</header>
+
+<section id="feed" class="feed" aria-live="polite" aria-label="What's happening"></section>
+
+<footer class="counts" aria-label="Population">
+  <button class="count" id="count-d" type="button" title="Show a random dumpling"><canvas width="44" height="44" data-portrait="0"></canvas><b id="n-d">0</b><span>dumplings</span></button>
+  <button class="count" id="count-g" type="button" title="Show a random grumble"><canvas width="44" height="44" data-portrait="1"></canvas><b id="n-g">0</b><span>grumbles</span></button>
+  <div class="count count-berries"><i class="berry-dot"></i><b id="n-b">0</b><span>berries</span></div>
+</footer>
+
+<aside id="card" class="card" hidden aria-live="polite">
+  <button class="card-close" id="card-close" type="button" aria-label="Close">×</button>
+  <div class="card-head">
+    <canvas id="portrait" width="220" height="200"></canvas>
+    <div>
+      <h2 id="c-name">Name</h2>
+      <p id="c-kind" class="c-kind"></p>
+      <p id="c-status" class="c-status"></p>
+    </div>
+  </div>
+  <div class="bars">
+    <label>Tummy<span class="bar"><i id="c-energy"></i></span></label>
+    <label>Age<span class="bar"><i id="c-age"></i></span></label>
+  </div>
+  <h3>Genes</h3>
+  <div class="genes" id="c-genes"></div>
+  <dl class="facts" id="c-facts"></dl>
+  <div class="card-actions">
+    <button id="btn-follow" class="btn btn-main" type="button">Follow</button>
+    <button id="btn-share" class="btn" type="button">Copy link</button>
+  </div>
+</aside>
+
+<section id="graph-panel" class="panel graph-panel" hidden>
+  <button class="card-close" data-close="graph-panel" type="button" aria-label="Close">×</button>
+  <h2>How Wigglewood is doing</h2>
+  <div class="tabs" role="tablist">
+    <button role="tab" class="tab" data-view="pop" aria-selected="true">Population</button>
+    <button role="tab" class="tab" data-view="genes" aria-selected="false">Evolution</button>
+  </div>
+  <div class="tabs ranges" role="group" aria-label="Time range">
+    <button class="tab" data-range="6" aria-pressed="true">6 hours</button>
+    <button class="tab" data-range="24" aria-pressed="false">24 hours</button>
+    <button class="tab" data-range="all" aria-pressed="false">All time</button>
+  </div>
+  <div class="chart-wrap">
+    <canvas id="chart"></canvas>
+    <div id="chart-tip" class="chart-tip" hidden></div>
+  </div>
+  <p class="chart-note" id="chart-note"></p>
+  <dl class="facts stats" id="stats"></dl>
+</section>
+
+<section id="help-panel" class="panel help-panel" hidden>
+  <button class="card-close" data-close="help-panel" type="button" aria-label="Close">×</button>
+  <h2>What is this?</h2>
+  <p>Wigglewood is a little island that never stops. Dumplings eat berries, grumbles eat dumplings, and both have babies that inherit their parents' genes with small changes. Over time the island figures out what works.</p>
+  <p>It's the same world for everyone. The whole island is worked out from the current time, so if you and a friend open it at the same moment you'll see the same creatures in the same places. Close the tab and come back tomorrow: life carried on without you.</p>
+  <p>The sky follows your own clock, so it's night here when it's night where you are. Seasons belong to the island: each one lasts three hours.</p>
+  <h3>Looking around</h3>
+  <ul>
+    <li>Drag to move, scroll or pinch to zoom.</li>
+    <li>Click a creature to see its genes, family and mood.</li>
+    <li>Arrow keys or WASD pan, + and − zoom, F follows, Esc lets go.</li>
+  </ul>
+  <h3>The genes</h3>
+  <ul>
+    <li><b>Size</b>: bigger stores more food and is harder to catch, but burns energy fast.</li>
+    <li><b>Speed</b>: outrun or run down, at a cost.</li>
+    <li><b>Sight</b>: spot food and danger from further away.</li>
+    <li>Colour, eyes, patterns and hats drift over generations, so you can see families.</li>
+  </ul>
+  <p class="small">Every 30 minutes a GitHub Action moves the island forward and saves a checkpoint; your browser picks it up and simulates the last few minutes itself. <span id="sync-info"></span></p>
+</section>
+
+<div id="loader" class="loader" role="status">
+  <canvas id="loader-art" width="160" height="140" aria-hidden="true"></canvas>
+  <p id="loader-text">Waking up Wigglewood…</p>
+  <div class="progress"><i id="loader-bar"></i></div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

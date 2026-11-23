@@ -1,0 +1,9 @@
+{
+  "name": "wigglewood",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "advance": "node scripts/advance.mjs",
+    "test": "node scripts/test-determinism.mjs"
+  }
+}
