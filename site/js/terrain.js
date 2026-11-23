@@ -61,7 +61,7 @@ export function renderTile(season, z, tx, ty) {
   const img = ctx.createImageData(TILE, TILE);
   const d = img.data;
   const L = S.LEVEL;
-  const coastW = 2.3, hillW = 1.5, peakW = 1.9;
+  const coastW = 1.6, hillW = 1.1, peakW = 1.35;
   for (let j = 0; j < TILE; j++) {
     for (let i = 0; i < TILE; i++) {
       const k = (j + 1) * N + (i + 1);
@@ -157,6 +157,15 @@ function drawDecals(ctx, season, ps, wx0, wy0, P) {
         ctx.quadraticCurveTo(x + s / 2, y - 4, x + s, y);
         ctx.stroke();
       }
+    } else if (e >= S.LEVEL.PEAK + 0.01 && h < 0.22) {
+      // little mountain-top peaks so snowfields don't read as lakes
+      ctx.strokeStyle = 'rgba(120,130,150,0.55)';
+      ctx.lineWidth = 1.8;
+      const s = 5 + h2 * 4;
+      ctx.beginPath();
+      ctx.moveTo(x - s, y + s * 0.4); ctx.lineTo(x - s * 0.3, y - s * 0.5); ctx.lineTo(x + s * 0.2, y + s * 0.1);
+      ctx.lineTo(x + s * 0.6, y - s * 0.25); ctx.lineTo(x + s, y + s * 0.4);
+      ctx.stroke();
     } else if (e >= S.LEVEL.HILL && e < S.LEVEL.PEAK && h < 0.12) {
       ctx.strokeStyle = 'rgba(90,85,80,0.45)';
       ctx.lineWidth = 1.6;

@@ -27,7 +27,22 @@ const app = {
   lastFrame: performance.now(),
   keys: new Set(),
   shake: new Map(), // bush index -> until (ms)
+  sums: new Map(), // checkpoint tick -> checksum we computed ourselves
 };
+
+// Every few minutes compare our own checkpoint with the one GitHub saved. If they
+// ever disagree (say the rules changed while this tab was open) start over from theirs.
+setInterval(async () => {
+  if (!app.live || document.visibilityState !== 'visible') return;
+  try {
+    const meta = await (await fetch(`state/meta.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+    const mine = app.sums.get(meta.tick);
+    if (mine && mine !== meta.checksum) {
+      console.warn(`checkpoint ${meta.tick} differs (${mine} here, ${meta.checksum} on GitHub); reloading`);
+      location.reload();
+    }
+  } catch (e) { /* offline is fine, keep going */ }
+}, 5 * 60 * 1000);
 window.__wigglewood = app; // handy for poking around in the console
 // preview helpers (renderer only, the shared world is unaffected): ?season=0..3&hour=0..24
 const params = new URLSearchParams(location.search);
@@ -159,6 +174,7 @@ function stepLive() {
     for (const c of app.w.creatures) app.prev.set(c.id, [c.x, c.y]);
     S.step(app.w);
     n++;
+    if (app.w.tick % S.CHECKPOINT_TICKS === 0) app.sums.set(app.w.tick, S.checksum(app.w));
     handleFx(app.w.fx, target - app.w.tick < 4);
   }
   if (n) UI.onTick(app);
@@ -658,10 +674,13 @@ function drawSky(sun, weather, season) {
     ctx.fillRect(0, 0, cw, ch);
   }
   if (sun.dusk > 0.02 && sun.day > 0.05) {
-    ctx.globalAlpha = sun.dusk * 0.55 * Math.min(1, sun.day * 2);
-    ctx.fillStyle = 'rgb(255,196,150)';
+    // golden hour: warm the colours without muddying them
+    ctx.globalCompositeOperation = 'soft-light';
+    ctx.globalAlpha = sun.dusk * 0.6 * Math.min(1, sun.day * 2);
+    ctx.fillStyle = 'rgb(255,150,70)';
     ctx.fillRect(0, 0, cw, ch);
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'multiply';
   }
   if (night > 0.01) {
     const r = Math.round(255 - night * 158), g = Math.round(255 - night * 146), b = Math.round(255 - night * 78);
