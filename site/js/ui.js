@@ -280,7 +280,6 @@ function drawPortraitLoop() {
     const scale = Math.min(4.2, 62 / r);
     pctx.translate(cv.width / 2, cv.height * 0.84);
     pctx.scale(scale, scale);
-    const moving = c.st !== S.ST.SLEEP && c.st !== S.ST.EAT && c.st !== S.ST.GRAZE && c.st !== S.ST.FEAST && c.st !== S.ST.STUN;
     const o = { t, walk: t * 1.6, moving: false, facing: 1, lookX: Math.sin(t * 0.5) * 0.6, lookY: 0.1, growth: S.growth(c), mood: 'open', mouth: 'smile' };
     if (c.s === 0) {
       if (c.st === S.ST.SLEEP) o.mood = 'closed';
@@ -295,7 +294,6 @@ function drawPortraitLoop() {
       o.mouth = c.st === S.ST.FEAST ? 'chomp' : c.st === S.ST.HUNT ? 'open' : 'smile';
       SP.drawGrumble(pctx, c, o);
     }
-    void moving;
   };
   loop();
 }

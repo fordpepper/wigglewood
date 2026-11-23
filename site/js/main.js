@@ -630,7 +630,6 @@ function drawParticles(t, dt) {
 
 // soft sparkles on the water so the sea feels alive
 function drawWaterSparkles(t, view, season) {
-  if (season === 3 && Math.random() < 0) return;
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,0.7)';
   ctx.lineWidth = 2; ctx.lineCap = 'round';
