@@ -26,9 +26,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -64,10 +64,10 @@ jobs:
             commit -qm "Checkpoint at tick $(node -p "require('./meta.json').tick")"
           git push -fq "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" state
 
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
         with:
           path: site
@@ -75,7 +75,7 @@ jobs:
       - id: deploy
         if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
         continue-on-error: true
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
       # the artifact API is occasionally slow to notice a fresh upload; try once more
       - name: Wait before retrying the deploy
@@ -84,4 +84,4 @@ jobs:
 
       - id: deploy-retry
         if: steps.deploy.outcome == 'failure'
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
