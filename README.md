@@ -8,8 +8,8 @@ A pixel art world of islands that never stops. Dumplings eat berries, grumbles e
 dumplings, and both have babies that inherit their parents' genes (size, speed,
 sight, colour, hats) with small mutations, so the creatures slowly evolve.
 
-The world is big (19200 by 12800 world units) and mostly sea. Seven islands and a
-scattering of islets sit in it, cold in the north and hot in the south, with
+The world is big (19200 by 12800 world units) and mostly sea. Seven big,
+odd-shaped islands, a few small ones and a scattering of islets sit in it, cold in the north and hot in the south, with
 nine biomes between them: tundra, taiga, meadow, forest, steppe, swamp, savanna,
 jungle and desert, each with its own ground, trees, berry bushes and seasons.
 Creatures can't swim, so every island's population evolves on its own: each
@@ -21,7 +21,8 @@ few berry groves per island; the land in between stays quiet.
 **Everyone sees the same world.** The state of the world is a pure function of
 the current time: open it on two devices at once and the same creatures are in
 the same places. No accounts, no server, just GitHub. Nobody can change it:
-you can look around and tap a creature to see who it is, that's all.
+you can look around, tap a creature to see who it is, and double tap anywhere
+(or press `/`) to find someone by name. That's all.
 
 ## How it works
 

@@ -39,7 +39,7 @@ function buildDumpling(c, R, frame) {
   const [w, h, ax, ay] = bodyBox(R);
   const p = new Pix(w, h, ax, ay);
   const walking = frame >= 2, step = frame - 2;
-  const bob = walking && (step === 1 || step === 3) ? 1 : 0;
+  const bob = 0; // bodies stay put while the feet step: steadier, less jittery
   const squash = frame === 1 ? 1 : 0;
   const footH = Math.max(1, Math.round(R * 0.22));
   // feet (one lifts while walking)
@@ -106,7 +106,7 @@ function buildGrumble(c, R, frame) {
   const [w, h, ax, ay] = bodyBox(R * 1.05);
   const p = new Pix(w, h, ax, ay);
   const walking = frame >= 2, step = frame - 2;
-  const bob = walking && (step === 1 || step === 3) ? 1 : 0;
+  const bob = 0; // bodies stay put while the feet step: steadier, less jittery
   const legH = Math.max(1, Math.round(R * 0.3));
   if (R >= 2.5) {
     for (const sd of [-1, 1]) {

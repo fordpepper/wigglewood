@@ -10,6 +10,7 @@ const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2
 export function init(a, actions) {
   app = a; act = actions;
   $('card').addEventListener('click', () => act.deselect());
+  initSearch();
   const tick = () => { $('clock').textContent = timeFmt.format(new Date()); };
   tick();
   setInterval(tick, 1000);
@@ -72,7 +73,7 @@ function updateCard() {
   const sp = S.SPECIES[c.s];
   const mins = Math.floor(c.age / S.TPS / 60);
   $('c-name').textContent = c.n;
-  $('c-kind').textContent = `${sp.name} from ${S.islandName(c.il)}, generation ${c.gen}, ${mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`} old`;
+  $('c-kind').textContent = `${sp.name} from ${S.islandName(c.il)}, ${mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`} old`;
   $('c-status').textContent = statusText(c);
   const em = S.maxEnergy(c);
   const e = $('c-energy');
@@ -113,6 +114,76 @@ function portraitLoop() {
     SP.drawCreature(pctx, c, Math.floor(cv.width / 2), cv.height - 6, o, u);
   };
   loop();
+}
+
+// ---------------------------------------------------------------------------
+// name search (double tap anywhere, or press / on a keyboard)
+
+const MAX_RESULTS = 8;
+function initSearch() {
+  const input = $('search-input');
+  input.addEventListener('input', () => renderResults());
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { const first = $('search-results').querySelector('button'); if (first) first.click(); }
+    else if (e.key === 'Escape') closeSearch();
+    else if (e.key === 'ArrowDown') { const first = $('search-results').querySelector('button'); if (first) { e.preventDefault(); first.focus(); } }
+    e.stopPropagation();
+  });
+  $('search-results').addEventListener('keydown', e => {
+    const items = [...$('search-results').querySelectorAll('button')], i = items.indexOf(document.activeElement);
+    if (e.key === 'ArrowDown' && i < items.length - 1) { e.preventDefault(); items[i + 1].focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); (i > 0 ? items[i - 1] : input).focus(); }
+    else if (e.key === 'Escape') closeSearch();
+    e.stopPropagation();
+  });
+  $('search-close').addEventListener('click', () => closeSearch());
+  setInterval(() => { if (searchOpen() && document.activeElement === input) renderResults(); }, 1500);
+}
+export function searchOpen() { return !$('search').hidden; }
+export function openSearch() {
+  $('search').hidden = false;
+  const input = $('search-input');
+  input.value = '';
+  renderResults();
+  input.focus();
+}
+export function closeSearch() {
+  $('search').hidden = true;
+  $('search-input').blur();
+}
+function renderResults() {
+  const q = $('search-input').value.trim().toLowerCase();
+  const ul = $('search-results');
+  ul.textContent = '';
+  if (!q) { $('search-hint').hidden = false; return; }
+  $('search-hint').hidden = true;
+  const starts = [], has = [];
+  for (const c of app.w.creatures) {
+    const n = c.n.toLowerCase();
+    if (n.startsWith(q)) starts.push(c); else if (n.includes(q)) has.push(c);
+  }
+  const byName = (a, b) => a.n.localeCompare(b.n) || a.id - b.id;
+  const list = starts.sort(byName).concat(has.sort(byName)).slice(0, MAX_RESULTS);
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.className = 'none';
+    li.textContent = 'Nobody by that name right now.';
+    ul.append(li);
+    return;
+  }
+  for (const c of list) {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    const name = document.createElement('strong');
+    name.textContent = c.n;
+    const where = document.createElement('span');
+    where.textContent = `${S.SPECIES[c.s].name}, ${S.islandName(c.il)}`;
+    b.append(name, where);
+    b.addEventListener('click', () => { closeSearch(); act.select(c.id); });
+    li.append(b);
+    ul.append(li);
+  }
 }
 
 // ---------------------------------------------------------------------------

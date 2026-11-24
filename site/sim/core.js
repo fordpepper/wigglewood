@@ -166,31 +166,42 @@ export const isWooded = b => b === BIOME.FOREST || b === BIOME.JUNGLE || b === B
 export const isHot = b => b === BIOME.DESERT || b === BIOME.SAVANNA || b === BIOME.JUNGLE;
 export const isCold = b => b === BIOME.TAIGA || b === BIOME.TUNDRA;
 
-// the big islands: centre, half sizes, and a nudge to their climate
+// The big islands, each a union of overlapping ellipses ("lobes": centre and
+// half sizes) so they get capes, bays and odd shapes, plus a nudge to their climate.
 export const ISLANDS = [
-  { name: 'Snowmuffin', x: 4500, y: 2350, rx: 2900, ry: 1500, t: 0.02, m: 0.06, hues: [[196, 212, 178, 280], [232, 258]] },
-  { name: 'Pinecrumb', x: 13900, y: 2300, rx: 2400, ry: 1350, t: 0.03, m: 0.14, hues: [[140, 158, 96], [18, 350]] },
-  { name: 'Wigglewood', x: 9300, y: 6600, rx: 3900, ry: 2250, t: 0, m: 0, hues: [[48, 330, 22, 200], [268, 300]] },
-  { name: 'Bogbottom', x: 16500, y: 6900, rx: 1800, ry: 2400, t: 0.03, m: 0.26, hues: [[82, 112, 62], [300, 328]] },
-  { name: 'Junglejam', x: 3700, y: 9800, rx: 2700, ry: 1950, t: 0.06, m: 0.24, hues: [[0, 330, 275], [188, 160]] },
-  { name: 'Sunbiscuit', x: 12900, y: 10700, rx: 3500, ry: 1450, t: 0.06, m: -0.3, hues: [[30, 42, 14], [350, 12]] },
-  { name: 'Little Puddle', x: 1650, y: 5900, rx: 950, ry: 1150, t: 0, m: 0.06, hues: [[275, 250], [268]] },
+  { name: 'Snowmuffin', t: 0.02, m: 0.04, hues: [[196, 212, 178, 280], [232, 258]],
+    lobes: [[3100, 2300, 1900, 1150], [5100, 3150, 1500, 900], [1900, 1500, 900, 650], [6500, 3900, 800, 520]] },
+  { name: 'Pinecrumb', t: 0.03, m: 0.12, hues: [[140, 158, 96], [18, 350]],
+    lobes: [[12500, 1900, 1500, 900], [14100, 2700, 1100, 850], [11250, 1400, 650, 480]] },
+  { name: 'Wigglewood', t: 0, m: 0, hues: [[48, 330, 22, 200], [268, 300]],
+    lobes: [[8700, 5900, 2500, 1600], [10900, 5100, 1500, 1150], [7300, 7300, 1250, 950], [11300, 7500, 1200, 750], [12500, 8250, 650, 450]] },
+  { name: 'Bogbottom', t: 0.03, m: 0.22, hues: [[82, 112, 62], [300, 328]],
+    lobes: [[16900, 5500, 1200, 1400], [17500, 7100, 900, 1000], [17300, 8400, 750, 550]] },
+  { name: 'Junglejam', t: 0.06, m: 0.2, hues: [[0, 330, 275], [188, 160]],
+    lobes: [[3500, 9400, 1800, 1350], [2200, 10700, 1200, 900], [5100, 10400, 1200, 900], [4000, 8300, 750, 550]] },
+  { name: 'Sunbiscuit', t: 0.06, m: -0.26, hues: [[30, 42, 14], [350, 12]],
+    lobes: [[10400, 11000, 1500, 900], [12500, 11400, 1600, 800], [14400, 10800, 1300, 850], [15600, 10250, 550, 450]] },
+  { name: 'Little Puddle', t: 0, m: 0.06, hues: [[275, 250], [268]],
+    lobes: [[1300, 5900, 750, 950], [1900, 6900, 450, 380]] },
 ];
 // islets out in the open sea (scenery only: nobody lives there)
 const ISLETS = [];
-for (let i = 0; i < 300 && ISLETS.length < 26; i++) {
+for (let i = 0; i < 400 && ISLETS.length < 16; i++) {
   const x = 700 + hash01(i, 1, SEED + 901) * (WORLD_W - 1400), y = 700 + hash01(i, 2, SEED + 901) * (WORLD_H - 1400);
-  const r = 200 + hash01(i, 3, SEED + 901) * 420;
+  const r = 160 + hash01(i, 3, SEED + 901) * 440;
   let clear = true;
-  for (const s of ISLANDS) {
-    const dx = (x - s.x) / (s.rx + r + 550), dy = (y - s.y) / (s.ry + r + 550);
+  for (const s of ISLANDS) for (const [lx, ly, rx, ry] of s.lobes) {
+    const dx = (x - lx) / (rx + r + 500), dy = (y - ly) / (ry + r + 500);
     if (dx * dx + dy * dy < 1) clear = false;
   }
   for (const s of ISLETS) {
-    const dx = x - s.x, dy = y - s.y;
-    if (dx * dx + dy * dy < 1100 * 1100) clear = false;
+    const [lx, ly] = s.lobes[0], dx = x - lx, dy = y - ly;
+    if (dx * dx + dy * dy < 1300 * 1300) clear = false;
   }
-  if (clear) ISLETS.push({ x, y, rx: r, ry: r * (0.7 + hash01(i, 4, SEED + 901) * 0.6) });
+  if (!clear) continue;
+  // two overlapping blobs, so they aren't perfect circles
+  const a = hash01(i, 5, SEED + 901) * 6.283185307179586, ca = dcos(a), sa = dsin(a);
+  ISLETS.push({ lobes: [[x, y, r, r * (0.6 + hash01(i, 4, SEED + 901) * 0.5)], [x + ca * r * 0.9, y + sa * r * 0.7, r * 0.6, r * 0.5]] });
 }
 
 function valueNoise(x, y, seed) {
@@ -210,13 +221,20 @@ function fbm(x, y, seed, oct) {
   return s / norm;
 }
 
-// distance-like measure from an island's centre: 0 in the middle, 1 at its rim
+// distance-like measure from an island's middle: 0 at a lobe's centre, 1 at its
+// rim. Lobes melt into each other (a smooth minimum) so an island stays in one piece.
 function islandDist(s, x, y) {
-  const dx = (x - s.x) / s.rx, dy = (y - s.y) / s.ry;
-  const r2 = dx * dx + dy * dy;
-  return 0.72 * Math.sqrt(r2) + 0.28 * Math.sqrt(Math.sqrt(dx * dx * dx * dx + dy * dy * dy * dy));
+  let best = 1e9;
+  for (const [lx, ly, rx, ry] of s.lobes) {
+    const dx = (x - lx) / rx, dy = (y - ly) / ry;
+    const d = 0.72 * Math.sqrt(dx * dx + dy * dy) + 0.28 * Math.sqrt(Math.sqrt(dx * dx * dx * dx + dy * dy * dy * dy));
+    if (best > 1e8) { best = d; continue; }
+    const k = 0.45, h = clamp(0.5 + 0.5 * (best - d) / k, 0, 1);
+    best = best + (d - best) * h - k * h * (1 - h);
+  }
+  return best;
 }
-function bendAt(x, y) { return (fbm(x / 1700 + 7, y / 1700 - 3, SEED + 31, 3) - 0.5) * 0.62 + (fbm(x / 600 - 5, y / 600 + 2, SEED + 32, 2) - 0.5) * 0.3; }
+function bendAt(x, y) { return (fbm(x / 1700 + 7, y / 1700 - 3, SEED + 31, 3) - 0.5) * 0.72 + (fbm(x / 600 - 5, y / 600 + 2, SEED + 32, 2) - 0.5) * 0.3; }
 // which big island a spot belongs to (-1: an islet or the open sea), and how far in
 function nearestIsland(x, y, bend) {
   let best = 1e9, bi = -1;
@@ -408,10 +426,26 @@ export function groves() {
 }
 // islands with groves, i.e. the ones creatures live on
 export function homes() { groves(); return HOMES; }
+// The biggest piece of each big island carries its name; smaller pieces that
+// broke off, and inhabited islets, get names of their own.
+const SMALL_NAMES = ['Crumbcake Isle', 'Pebble Key', 'Mossy Atoll', 'Biscuit Rock', 'Tumble Isle', 'Sprout Key', 'Nibble Isle', 'Teacup Rock', 'Button Key', 'Muffin Reef'];
+let NAMES = null;
 export function islandName(il) {
-  const h = homes().get(il);
-  const s = h ? ISLANDS[GROVES[h[0]].isl] : null;
-  return s ? s.name : 'a little islet';
+  if (!NAMES) {
+    NAMES = new Map();
+    labels();
+    const best = new Map(); // spec -> biggest component
+    for (const [c] of homes()) {
+      const sp = GROVES[HOMES.get(c)[0]].isl;
+      if (sp >= 0 && (!best.has(sp) || COMP_SIZE[c] > COMP_SIZE[best.get(sp)])) best.set(sp, c);
+    }
+    let k = 0;
+    for (const [c] of homes()) {
+      const sp = GROVES[HOMES.get(c)[0]].isl;
+      NAMES.set(c, sp >= 0 && best.get(sp) === c ? ISLANDS[sp].name : SMALL_NAMES[k++ % SMALL_NAMES.length]);
+    }
+  }
+  return NAMES.get(il) || 'a little islet';
 }
 function nearestGrove(x, y, il) {
   const gs = groves(), list = HOMES.get(il);
@@ -581,7 +615,7 @@ function newCreature(w, s, x, y, genes, gen, parents, ageTicks, il) {
     pn: parents ? [parents[0].n, parents[1].n] : null,
     kids: 0, st: ST.WANDER, tg: -1, cd: Math.floor(sp.cooldown * 0.5), sta: 40, stun: 0,
     ate: 0, kills: 0, born: w.tick - ageTicks, lt: 0, fat: rint(w, 0, AWAKE[s]),
-    il, hm: s === GRUMBLE ? home[rint(w, 0, home.length - 1)] : nearestGrove(x, y, il), dt: 0,
+    tr: 0, il, hm: s === GRUMBLE ? home[rint(w, 0, home.length - 1)] : nearestGrove(x, y, il), dt: 0,
   };
   c.e = maxEnergy(c) * (parents ? 0.55 : 0.75);
   return c;
@@ -724,10 +758,12 @@ function steerTo(c, tx, ty, amt) {
 function steerAway(c, tx, ty, amt) {
   steerTo(c, c.x * 2 - tx, c.y * 2 - ty, amt);
 }
+// Gentle, curving walks: the turn rate itself drifts a little each tick, so
+// paths bend smoothly instead of zig-zagging.
 function wanderTurn(w, c, spread) {
-  const k = clamp(16 + Math.round(rnorm(w) * spread), 0, ROT_STEPS - 1);
-  const r = ROT[k];
-  const hx = c.hx * r[0] - c.hy * r[1], hy = c.hx * r[1] + c.hy * r[0];
+  c.tr = r4(clamp(c.tr * 0.9 + rnorm(w) * 0.0035 * spread, -0.07, 0.07));
+  const sa = c.tr, ca = 1 - sa * sa / 2; // small-angle rotation, renormalised below
+  const hx = c.hx * ca - c.hy * sa, hy = c.hx * sa + c.hy * ca;
   const l = Math.sqrt(hx * hx + hy * hy);
   c.hx = hx / l; c.hy = hy / l;
 }
@@ -1029,7 +1065,7 @@ export function step(w) {
       const dx = c.x - o.x, dy = c.y - o.y, d2 = dx * dx + dy * dy;
       const min = rad + radius(o);
       if (d2 < min * min && d2 > 1e-6) {
-        const d = Math.sqrt(d2), push = (min - d) * 0.25;
+        const d = Math.sqrt(d2), push = (min - d) * 0.12;
         const nx = c.x + dx / d * push, ny = c.y + dy / d * push;
         if (walkable(nx, ny)) { c.x = nx; c.y = ny; }
       }

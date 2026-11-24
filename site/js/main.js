@@ -2,7 +2,7 @@ import * as S from '../sim/core.js';
 import * as T from './terrain.js';
 import * as SP from './sprites.js';
 import * as UI from './ui.js';
-import { PX, textSprite, textWidth, INK, INK_CSS as SP_INK, hex } from './pixel.js';
+import { PX, textSprite, hex } from './pixel.js';
 
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
@@ -13,6 +13,7 @@ const app = {
   snapshotTick: -1,
   prev: new Map(), // id -> [x, y] before the latest step
   facing: new Map(), // id -> +1 / -1
+  flipAt: new Map(), // id -> when it last turned around (s)
   walk: new Map(), // id -> walk phase
   look: new Map(), // id -> [lx, ly] smoothed
   seen: new Set(), // ids we've drawn (to spot newborns)
@@ -83,7 +84,7 @@ async function boot() {
   app.w = w;
   await catchUp(true);
   T.warmup(seasonNow());
-  UI.init(app, { deselect });
+  UI.init(app, { deselect, select });
   chooseStartView();
   app.live = true;
   UI.hideLoader();
@@ -176,7 +177,7 @@ function stepLive() {
   // forget render state of creatures that are gone
   if (n && app.w.tick % 240 === 0) {
     const alive = new Set(app.w.creatures.map(c => c.id));
-    for (const m of [app.facing, app.walk, app.look]) for (const id of m.keys()) if (!alive.has(id)) m.delete(id);
+    for (const m of [app.facing, app.flipAt, app.walk, app.look]) for (const id of m.keys()) if (!alive.has(id)) m.delete(id);
     for (const id of app.seen) if (!alive.has(id)) app.seen.delete(id);
   }
 }
@@ -324,10 +325,17 @@ function updateCamera(dt) {
     // keep the creature visible above the card on narrow screens
     const card = document.getElementById('card');
     const off = !card.hidden && app.W <= 720 ? card.offsetHeight / 2 / app.cam.z : 0;
-    if (p) app.camTarget = { x: p[0], y: p[1] - 10 + off, z: app.camTarget && app.camTarget.z };
+    if (p) {
+      // a long way off: rise up, glide over the sea, come back down
+      const far = Math.hypot(p[0] - app.cam.x, p[1] - app.cam.y);
+      if (far > 1600) app.flying = true;
+      let z = app.camTarget && app.camTarget.z;
+      if (app.flying) { z = far > 700 ? Math.max(minZoom(), defaultZoom() * 0.2) : defaultZoom(); if (far <= 700) app.flying = false; }
+      app.camTarget = { x: p[0], y: p[1] - 10 + off, z };
+    }
   }
   if (app.camTarget) {
-    const ease = 1 - Math.pow(0.0025, dt);
+    const ease = 1 - Math.pow(app.flying ? 0.35 : 0.0025, dt);
     app.cam.x += (app.camTarget.x - app.cam.x) * ease;
     app.cam.y += (app.camTarget.y - app.cam.y) * ease;
     if (app.camTarget.z) {
@@ -455,11 +463,9 @@ function render(t, dt) {
 
   if (L === 0) for (const [c, p] of drawn) drawEmote(c, p, t, u);
   drawParticles(t, dt, u);
-  if (sel) drawNameTag(sel, renderPos(sel, a), true, u);
-  if (app.hover >= 0 && app.hover !== app.selected) {
-    const hc = byId(app.hover);
-    if (hc) drawNameTag(hc, renderPos(hc, a), false, u);
-  }
+  placeTag(tagSel, sel, sel && renderPos(sel, a), u);
+  const hc = app.hover >= 0 && app.hover !== app.selected ? byId(app.hover) : null;
+  placeTag(tagHover, hc, hc && renderPos(hc, a), u);
 
   // light: weather + time of day (the viewer's own clock)
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -505,8 +511,10 @@ function drawRing(X, Y, rx, t) {
 
 function drawCreature(c, p, X, Y, t, dt, u) {
   // facing with a little hysteresis so they don't flicker
+  // facing, with hysteresis and a short hold so they don't flip back and forth
   let f = app.facing.get(c.id) || (c.hx >= 0 ? 1 : -1);
-  if (c.hx > 0.25) f = 1; else if (c.hx < -0.25) f = -1;
+  const flipAt = app.flipAt.get(c.id) || 0;
+  if (t - flipAt > 0.6 && ((c.hx > 0.45 && f < 0) || (c.hx < -0.45 && f > 0))) { f = -f; app.flipAt.set(c.id, t); }
   app.facing.set(c.id, f);
   const prev = app.prev.get(c.id);
   const moving = !!prev && (Math.abs(prev[0] - c.x) + Math.abs(prev[1] - c.y)) > 0.3;
@@ -524,14 +532,14 @@ function drawCreature(c, p, X, Y, t, dt, u) {
     lx = dx / d; ly = dy / d * 0.8;
   } else if (!moving) {
     // idle: glance around now and then
-    const k = Math.floor(t * 0.7 + c.id * 0.37);
+    const k = Math.floor(t * 0.25 + c.id * 0.37);
     lx = Math.sin(k * 12.9898 + c.id) > 0 ? 1 : -1; ly = Math.sin(k * 78.233) > 0.4 ? 1 : 0;
     lx *= f;
   }
   if (c.st === S.ST.GRAZE) { lx = 0.3 * f; ly = 1; }
   const o = {
     t, facing: f, lookX: lx * f, lookY: ly,
-    frame: moving ? 2 + (Math.floor(ph * 4) & 3) : (Math.floor(t * 1.1 + c.id * 0.31) & 1),
+    frame: moving ? 2 + (Math.floor(ph * 4) & 3) : ((t * 0.3 + c.id * 0.31) % 1 < 0.2 ? 1 : 0), // slow breaths
     mood: 'open', mouth: 'smile',
     blink: ((t * 0.7 + c.id * 0.37) % 4.2) < 0.15,
   };
@@ -582,18 +590,17 @@ function drawEmote(c, p, t, u) {
   }
 }
 
-function drawNameTag(c, p, strong, u) {
-  if (!p) return;
-  const X = Math.round(p[0] * u), Y = Math.round(p[1] * u) + headY(c, u) - (c.st === S.ST.SLEEP ? 10 : 2);
-  const tw = textWidth(c.n);
-  const x0 = X - Math.floor(tw / 2) - 3, y0 = Y - 9;
-  ctx.fillStyle = SP_INK;
-  ctx.fillRect(x0, y0, tw + 6, 9);
-  ctx.fillStyle = strong ? '#ffd23f' : '#fff8e8';
-  ctx.fillRect(x0 + 1, y0 + 1, tw + 4, 7);
-  ctx.drawImage(textSprite(c.n, INK, 0), x0 + 1, y0 + 1);
-  ctx.fillStyle = 'rgba(24,20,30,0.35)';
-  ctx.fillRect(x0 + 1, y0 + 9, tw + 6, 1);
+// Name tags are real text in the page (the pixel font at a readable size),
+// pinned above the creature's head.
+const tagSel = document.getElementById('tag'), tagHover = document.getElementById('tag-hover');
+function placeTag(el, c, p, u) {
+  if (!c || !p) { if (!el.hidden) el.hidden = true; return; }
+  const wy = p[1] + (headY(c, u) - (c.st === S.ST.SLEEP ? 10 : 3)) / u;
+  const sx = (p[0] - app.cam.x) * app.cam.z + app.W / 2, sy = (wy - app.cam.y) * app.cam.z + app.H / 2;
+  if (sx < -100 || sx > app.W + 100 || sy < -40 || sy > app.H + 60) { el.hidden = true; return; }
+  if (el.textContent !== c.n) el.textContent = c.n;
+  el.hidden = false;
+  el.style.transform = `translate(${Math.round(sx)}px,${Math.round(sy)}px) translate(-50%,-100%)`;
 }
 
 function drawParticles(t, dt, u) {
@@ -858,12 +865,24 @@ function endPointer(e) {
   } else if (pointers.size === 0) drag = null;
 }
 
+// a single tap shows who's there; a double tap anywhere opens the name search
+let lastTap = { t: 0, x: 0, y: 0 };
 function tap(sx, sy) {
+  const now = performance.now();
+  if (now - lastTap.t < 380 && Math.abs(sx - lastTap.x) + Math.abs(sy - lastTap.y) < 40) {
+    lastTap.t = 0;
+    UI.openSearch();
+    return;
+  }
+  lastTap = { t: now, x: sx, y: sy };
+  if (UI.searchOpen()) { UI.closeSearch(); return; }
   const c = creatureAt(sx, sy);
   if (c) select(c.id);
   else deselect();
 }
 
+// no emulated mouse events after a touch: they would steal focus from the search box
+canvas.addEventListener('touchend', e => e.preventDefault(), { passive: false });
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { app.hover = -1; });
@@ -895,7 +914,8 @@ window.addEventListener('keydown', e => {
     app.keys.add(k); e.preventDefault();
   } else if (k === '+' || k === '=') stepZoom(1);
   else if (k === '-' || k === '_') stepZoom(-1);
-  else if (k === 'Escape') deselect();
+  else if (k === 'Escape') { if (UI.searchOpen()) UI.closeSearch(); else deselect(); }
+  else if (k === '/' || k === 'f') { e.preventDefault(); UI.openSearch(); }
 });
 window.addEventListener('keyup', e => app.keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
 window.addEventListener('blur', () => app.keys.clear());
