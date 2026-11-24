@@ -1,0 +1,45 @@
+name: Heartbeat
+
+# Keeps the island's shared checkpoint fresh. One run beats every 30 minutes
+# for about five and a half hours, then starts its own successor. The cron
+# entry only matters if that chain ever breaks: it restarts it.
+on:
+  schedule:
+    - cron: '11,41 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: wigglewood-heartbeat
+  cancel-in-progress: false
+
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Beat every 30 minutes
+        run: node scripts/heartbeat.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Start the next run
+        run: |
+          if [ -f "$RUNNER_TEMP/handover" ]; then
+            gh workflow run heartbeat.yml --ref main -R "$GITHUB_REPOSITORY"
+          else
+            echo "no planned handover; the cron entry will restart the heartbeat"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -43,7 +43,8 @@ const app = {
 setInterval(async () => {
   if (!app.live || document.visibilityState !== 'visible') return;
   try {
-    const meta = await (await fetch(`state/meta.json?t=${Date.now()}`, { cache: 'no-store' })).json();
+    const meta = await fetchState('meta.json');
+    if (!meta) return;
     const mine = app.sums.get(meta.tick);
     if (mine && mine !== meta.checksum) {
       console.warn(`checkpoint ${meta.tick} differs (${mine} here, ${meta.checksum} on GitHub); reloading`);
@@ -53,6 +54,35 @@ setInterval(async () => {
   } catch (e) { /* offline is fine, keep going */ }
 }, 5 * 60 * 1000);
 window.__wigglewood = app; // handy for poking around in the console
+
+// The heartbeat workflow keeps the newest checkpoint on the repo's `state`
+// branch; read it straight from there (it changes without a Pages deploy) and
+// fall back to the copy bundled with the site.
+function stateSources() {
+  const out = [];
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  if (m) {
+    const repo = location.pathname.split('/').filter(Boolean)[0] || `${m[1]}.github.io`;
+    out.push(`https://raw.githubusercontent.com/${m[1]}/${repo}/state/`);
+  }
+  out.push('state/');
+  return out;
+}
+async function fetchState(file) {
+  let best = null;
+  for (const base of stateSources()) {
+    try {
+      const res = await fetch(`${base}${file}?t=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const text = await res.text();
+      if (file === 'meta.json') return JSON.parse(text);
+      const w = S.deserialize(text);
+      if (!best || w.tick > best.tick) best = w;
+      if (base !== 'state/') break; // the branch copy is the newest there is
+    } catch (e) { /* try the next source */ }
+  }
+  return best;
+}
 // preview helpers (renderer only, the shared world is unaffected): ?season=0..3&hour=0..24
 const params = new URLSearchParams(location.search);
 const previewSeason = params.has('season') ? +params.get('season') % 4 : null;
@@ -66,16 +96,8 @@ async function boot() {
   resize();
   UI.drawLoaderArt(0);
   S.terrain(); S.scenery();
-  let w = null;
-  try {
-    const res = await fetch(`state/latest.json?t=${Date.now()}`, { cache: 'no-store' });
-    if (res.ok) {
-      w = S.deserialize(await res.text());
-      app.snapshotTick = w.tick;
-    }
-  } catch (e) {
-    console.warn('no snapshot, starting from the beginning of time', e);
-  }
+  let w = await fetchState('latest.json');
+  if (w) app.snapshotTick = w.tick;
   // a checkpoint this browser saved itself on an earlier visit may be newer
   // (only trusted if it was made by exactly the same simulation code)
   app.simHash = await simFingerprint();
@@ -121,13 +143,8 @@ async function resync() {
   resyncing = true;
   app.live = false;
   UI.showLoader();
-  try {
-    const res = await fetch(`state/latest.json?t=${Date.now()}`, { cache: 'no-store' });
-    if (res.ok) {
-      const w = S.deserialize(await res.text());
-      if (w.tick > app.w.tick) { app.w = w; app.snapshotTick = w.tick; }
-    }
-  } catch (e) { /* keep simulating locally */ }
+  const w = await fetchState('latest.json');
+  if (w && w.tick > app.w.tick) { app.w = w; app.snapshotTick = w.tick; }
   await catchUp(false);
   app.live = true;
   UI.hideLoader();

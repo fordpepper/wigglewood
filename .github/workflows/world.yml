@@ -1,27 +1,26 @@
-name: Keep Wigglewood alive
+name: Publish the site
 
-# Every 15 minutes: load the last checkpoint, simulate up to the latest
-# 30-minute boundary, save it to the `state` branch and publish the site.
+# Publishes the page whenever main changes. The island's state itself is kept
+# fresh by the heartbeat workflow on the `state` branch; a copy of the latest
+# checkpoint is bundled here as a fallback.
 on:
-  schedule:
-    - cron: '4,19,34,49 * * * *'
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   pages: write
   id-token: write
+  actions: write
 
 concurrency:
-  group: wigglewood-world
-  cancel-in-progress: false
+  group: wigglewood-pages
+  cancel-in-progress: true
 
 jobs:
-  tick:
+  publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
@@ -35,49 +34,25 @@ jobs:
       - name: Check the simulation is deterministic
         run: node scripts/test-determinism.mjs
 
-      - name: Fetch the last checkpoint
+      - name: Bundle the latest checkpoint
         run: |
+          mkdir -p site/state
           if git fetch --depth=1 origin state 2>/dev/null; then
-            git show FETCH_HEAD:latest.json > "$RUNNER_TEMP/prev.json"
-            echo "previous checkpoint: $(git show FETCH_HEAD:meta.json)"
-          else
-            echo "no checkpoint yet, the world starts from the beginning"
+            git show FETCH_HEAD:latest.json > site/state/latest.json
+            git show FETCH_HEAD:meta.json > site/state/meta.json
+            cat site/state/meta.json
           fi
 
-      - name: Advance the world
-        id: advance
-        run: |
-          node scripts/advance.mjs "$RUNNER_TEMP/prev.json" site/state
-          new=$(node -p "require('./site/state/meta.json').tick")
-          old=$( [ -f "$RUNNER_TEMP/prev.json" ] && node -p "JSON.parse(require('fs').readFileSync(process.env.RUNNER_TEMP + '/prev.json','utf8')).tick" || echo -1 )
-          echo "changed=$([ "$new" != "$old" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-
-      - name: Save the checkpoint
-        if: steps.advance.outputs.changed == 'true'
-        run: |
-          dir="$RUNNER_TEMP/state"
-          mkdir -p "$dir" && cp site/state/latest.json site/state/meta.json "$dir/"
-          cd "$dir"
-          git init -q -b state
-          git add latest.json meta.json
-          git -c user.name="wigglewood-bot" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit -qm "Checkpoint at tick $(node -p "require('./meta.json').tick")"
-          git push -fq "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" state
-
       - uses: actions/configure-pages@v6
-        if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
 
       - uses: actions/upload-pages-artifact@v5
-        if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
         with:
           path: site
 
       - id: deploy
-        if: steps.advance.outputs.changed == 'true' || github.event_name != 'schedule'
         continue-on-error: true
         uses: actions/deploy-pages@v5
 
-      # the artifact API is occasionally slow to notice a fresh upload; try once more
       - name: Wait before retrying the deploy
         if: steps.deploy.outcome == 'failure'
         run: sleep 30
@@ -85,3 +60,18 @@ jobs:
       - id: deploy-retry
         if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v5
+
+      # make sure a heartbeat is running (if one already is, this one waits its turn)
+      - name: Wake the heartbeat
+        run: |
+          running=$(gh run list -R "$GITHUB_REPOSITORY" -w heartbeat.yml -s in_progress --json databaseId --jq length)
+          queued=$(gh run list -R "$GITHUB_REPOSITORY" -w heartbeat.yml -s queued --json databaseId --jq length)
+          pending=$(gh run list -R "$GITHUB_REPOSITORY" -w heartbeat.yml -s pending --json databaseId --jq length)
+          if [ "$running" = "0" ] && [ "$queued" = "0" ] && [ "$pending" = "0" ]; then
+            gh workflow run heartbeat.yml --ref main -R "$GITHUB_REPOSITORY"
+            echo "started the heartbeat"
+          else
+            echo "heartbeat already running"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
