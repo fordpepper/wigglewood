@@ -855,6 +855,7 @@ function bushInfo(w) {
 let COUNT = null;
 
 export function step(w) {
+  if (!HOMES) groves(); // a world loaded from a checkpoint needs the island tables too
   w.tick++;
   const tick = w.tick;
   const fx = (w.fx = []);
