@@ -10,7 +10,7 @@
 // browser that started from an older snapshot follows the exact same path as
 // the GitHub Action that produced a newer one.
 
-export const SIM_VERSION = 1;
+export const SIM_VERSION = 2;
 export const EPOCH_MS = Date.UTC(2026, 10, 23, 0, 0, 0); // world founded
 export const TICK_MS = 250;
 export const TPS = 1000 / TICK_MS;
@@ -45,7 +45,7 @@ export const SPECIES = [
     life: 19200, // 80 min
     cooldown: 2160, // 9 min
     litter: [1, 3],
-    cap: 280,
+    cap: 100,
   },
   {
     key: 'grumble', name: 'Grumble', plural: 'Grumbles',
@@ -58,7 +58,7 @@ export const SPECIES = [
     life: 36000, // 150 min
     cooldown: 3600, // 15 min
     litter: [1, 2],
-    cap: 60,
+    cap: 14,
   },
 ];
 
@@ -257,7 +257,7 @@ export function scenery() {
           if (h < 0.009) trees.push({ x: jx, y: jy, k, kind: 0 });
           else if (h > 0.97) flowers.push({ x: jx, y: jy, k });
         }
-        if (k < 0.1 && m > 0.28) bushSpots.push({ x: jx, y: jy });
+        if (k < 0.05 && m > 0.28) bushSpots.push({ x: jx, y: jy });
       } else if (e >= LEVEL.HILL && e < LEVEL.PEAK) {
         if (h < 0.06) rocks.push({ x: jx, y: jy, k, big: k > 0.6 });
         else if (h > 0.96) trees.push({ x: jx, y: jy, k, kind: 1 });
@@ -354,10 +354,10 @@ export function genesis() {
     w.bushes.push({ x: r4(b.x), y: r4(b.y), b: m, m });
   }
   // founders: little herds so families start near each other
-  for (let herd = 0; herd < 9; herd++) {
+  for (let herd = 0; herd < 6; herd++) {
     const [hx, hy] = randomLand(w, LEVEL.SAND + 0.03, LEVEL.HILL - 0.05);
     const base = founderGenes(w, DUMPLING);
-    for (let k = 0; k < 6; k++) {
+    for (let k = 0; k < 5; k++) {
       const g = base.slice();
       g[G_SIZE] = r4(clamp(g[G_SIZE] + rnorm(w) * 0.04, 0.6, 1.6));
       g[G_SPEED] = r4(clamp(g[G_SPEED] + rnorm(w) * 0.04, 0.6, 1.6));
@@ -368,11 +368,11 @@ export function genesis() {
       w.creatures.push(newCreature(w, DUMPLING, x, y, g, 0, null, rint(w, 2400, 9000)));
     }
   }
-  for (let k = 0; k < 7; k++) {
+  for (let k = 0; k < 4; k++) {
     const [x, y] = randomLand(w, LEVEL.SAND + 0.05, LEVEL.PEAK - 0.02);
     w.creatures.push(newCreature(w, GRUMBLE, x, y, founderGenes(w, GRUMBLE), 0, null, rint(w, 4800, 12000)));
   }
-  logEvent(w, 'world', 'Wigglewood was founded. 54 dumplings and 7 grumbles moved in.');
+  logEvent(w, 'world', 'Wigglewood was founded. 30 dumplings and 4 grumbles moved in.');
   recordHistory(w, true);
   normalize(w);
   return w;
@@ -662,7 +662,7 @@ export function step(w, edits) {
             }
           }
         }
-        if (!acted && ready(c) && countG < sp.cap && countD > countG * 10) acted = seekMate(w, c, grid, list, dead, babies, fx, sight * 1.4);
+        if (!acted && ready(c) && countG < sp.cap && countD > countG * 8) acted = seekMate(w, c, grid, list, dead, babies, fx, sight * 1.4);
         if (!acted && !isAdult(c) && c.pa >= 0) {
           const p = byId.get(c.pa) || byId.get(c.pb);
           if (p && !dead.has(p.id)) {
@@ -695,6 +695,8 @@ export function step(w, edits) {
     });
 
     c.x = r4(clamp(c.x, 9, WORLD_W - 9)); c.y = r4(clamp(c.y, 9, WORLD_H - 9));
+    // grumbles slow right down in winter, a bit like hibernating
+    if (c.s === GRUMBLE && season === 3) drainMul *= 0.55;
     c.e -= sp.drain * cost(c) * drainMul * (0.6 + 0.4 * growth(c));
     if (c.e <= 0) { dead.add(c.id); killed(w, c, 'starved'); }
     else if (c.age >= c.life) { dead.add(c.id); killed(w, c, 'old'); }
@@ -810,8 +812,7 @@ function killed(w, c, cause, by) {
   w.stats.deaths++;
   if (cause === 'eaten') w.stats.eaten++;
   else if (cause === 'starved') w.stats.starved++;
-  else if (cause === 'zapped') w.stats.zapped = (w.stats.zapped || 0) + 1;
-  else w.stats.old++;
+  else if (cause === 'old') w.stats.old++;
   w.graves.push({ x: c.x, y: c.y, n: c.n, s: c.s, h: c.g[G_HUE], t: w.tick, cause, age: c.age, by: by ? by.n : null });
   if (w.graves.length > 60) w.graves.shift();
   w.fx.push({ k: 'poof', id: c.id, x: c.x, y: c.y, s: c.s, cause });
@@ -832,7 +833,7 @@ function migrate(w) {
   if (nd === 0 && w.stats._dAlive !== false) { w.stats.extinctions[0]++; logEvent(w, 'extinct', 'The last dumpling is gone. Wigglewood is quiet.'); }
   if (ng === 0 && w.stats._gAlive !== false) { w.stats.extinctions[1]++; logEvent(w, 'extinct', 'The grumbles have died out.'); }
   w.stats._dAlive = nd > 0; w.stats._gAlive = ng > 0;
-  if (nd < 8) {
+  if (nd < 5) {
     const [x, y] = randomLand(w, LEVEL.SAND + 0.03, LEVEL.HILL - 0.05);
     const base = founderGenes(w, DUMPLING);
     for (let k = 0; k < 5; k++) {
@@ -842,7 +843,7 @@ function migrate(w) {
     w.stats.arrivals += 5;
     logEvent(w, 'arrive', 'A family of five dumplings wandered in from over the hills.', { x, y, s: DUMPLING });
   }
-  if (ng < 2 && nd > 40) {
+  if (ng < 2 && nd > 15) {
     const [x, y] = randomLand(w, LEVEL.SAND + 0.05, LEVEL.PEAK - 0.02);
     for (let k = 0; k < 2; k++) w.creatures.push(newCreature(w, GRUMBLE, x + rnorm(w) * 20, y + rnorm(w) * 20, founderGenes(w, GRUMBLE), 0, null, 5000));
     w.stats.arrivals += 2;
@@ -853,18 +854,19 @@ function migrate(w) {
 // ---------------------------------------------------------------------------
 // visitor edits
 //
-// Visitors can zap, feed and spawn creatures and refill bushes. Edits travel
+// Visitors can pick creatures up and put them down elsewhere, or poke them
+// (hurt them; enough pokes and they are gone). Edits travel
 // through a public ntfy.sh topic (no accounts anywhere). Each edit names the
 // tick it takes effect on, a few seconds in the future, so every browser and
 // the heartbeat apply it at exactly the same moment. Whether an edit counts is
 // decided only from the edit itself and the time ntfy stamped on it, so
 // everyone agrees.
 
-export const EDIT_TOPIC = 'wigglewood-edits-v1-q8f3k2';
+export const EDIT_TOPIC = 'wigglewood-edits-v2-m4t7x9';
 export const EDIT_URL = `https://ntfy.sh/${EDIT_TOPIC}`;
 export const EDIT_DELAY = 12; // ticks between sending an edit and it happening (3 s)
 export const EDITS_PER_MINUTE = 40; // island-wide, so nobody can wipe it out in one go
-const EDIT_KINDS = ['zap', 'feed', 'spawn', 'berries'];
+const EDIT_KINDS = ['move', 'poke'];
 
 // msg: an ntfy message ({ id, time, message }). Returns a clean edit or null.
 export function parseEdit(msg) {
@@ -878,17 +880,11 @@ export function parseEdit(msg) {
   const sent = tickAt(msg.time * 1000);
   if (t < sent - 8 || t > sent + 60) return null; // must be for "a few seconds from now"
   const e = { id: msg.id, t, k: o.k };
-  if (o.k === 'zap' || o.k === 'feed') {
-    if (!Number.isInteger(o.c) || o.c < 1) return null;
-    e.c = o.c;
-  } else {
+  if (!Number.isInteger(o.c) || o.c < 1) return null;
+  e.c = o.c;
+  if (o.k === 'move') {
     if (typeof o.x !== 'number' || typeof o.y !== 'number' || !(o.x >= 0 && o.x <= WORLD_W && o.y >= 0 && o.y <= WORLD_H)) return null;
     e.x = Math.round(o.x * 10) / 10; e.y = Math.round(o.y * 10) / 10;
-    if (o.k === 'spawn') {
-      if (o.s !== DUMPLING && o.s !== GRUMBLE) return null;
-      e.s = o.s;
-      if (typeof o.h === 'number' && o.h >= 0 && o.h < 360) e.h = Math.round(o.h);
-    }
   }
   return e;
 }
@@ -907,42 +903,25 @@ function applyEdits(w, edits) {
 }
 
 function applyEdit(w, e) {
-  if (e.k === 'zap' || e.k === 'feed') {
-    const i = w.creatures.findIndex(c => c.id === e.c);
-    if (i < 0) return false;
-    const c = w.creatures[i];
-    if (e.k === 'feed') {
-      c.e = maxEnergy(c);
-      w.fx.push({ k: 'fed', id: c.id, x: c.x, y: c.y });
-      return true;
-    }
+  const i = w.creatures.findIndex(c => c.id === e.c);
+  if (i < 0) return false;
+  const c = w.creatures[i];
+  if (e.k === 'move') {
+    // picked up and put down somewhere else (only onto solid ground)
+    if (!walkable(e.x, e.y)) return false;
+    c.x = e.x; c.y = e.y; c.st = ST.STUN; c.stun = 8; c.tg = -1;
+    w.fx.push({ k: 'dropped', id: c.id, x: c.x, y: c.y });
+    return true;
+  }
+  // poke: costs a big chunk of energy; enough pokes and it's gone
+  c.e -= maxEnergy(c) * 0.4;
+  c.stun = 6; c.st = ST.STUN;
+  w.fx.push({ k: 'ouch', id: c.id, x: c.x, y: c.y });
+  if (c.e <= 0) {
     w.creatures.splice(i, 1);
-    killed(w, c, 'zapped');
-    logEvent(w, 'zap', `A visitor zapped ${c.n} the ${SPECIES[c.s].name.toLowerCase()}.`, { s: c.s });
-    return true;
+    killed(w, c, 'poked');
+    w.stats.poked = (w.stats.poked || 0) + 1;
   }
-  if (e.k === 'berries') {
-    let best = null, bd = 90 * 90;
-    for (const b of w.bushes) {
-      const dx = b.x - e.x, dy = b.y - e.y, d = dx * dx + dy * dy;
-      if (d < bd) { bd = d; best = b; }
-    }
-    if (!best) return false;
-    best.b = best.m;
-    w.fx.push({ k: 'refill', x: best.x, y: best.y });
-    return true;
-  }
-  // spawn
-  if (!walkable(e.x, e.y)) return false;
-  if (countSpecies(w.creatures, e.s) >= SPECIES[e.s].cap) return false;
-  const g = founderGenes(w, e.s);
-  if (e.h !== undefined) g[G_HUE] = e.h;
-  const c = newCreature(w, e.s, e.x, e.y, g, 0, null, SPECIES[e.s].mature);
-  c.e = maxEnergy(c) * 0.8;
-  w.creatures.push(c);
-  w.stats.spawned = (w.stats.spawned || 0) + 1;
-  w.fx.push({ k: 'spawned', id: c.id, x: c.x, y: c.y });
-  logEvent(w, 'spawn', `A visitor dropped in a new ${SPECIES[e.s].name.toLowerCase()} called ${c.n}.`, { id: c.id, s: e.s });
   return true;
 }
 

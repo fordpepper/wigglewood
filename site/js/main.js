@@ -37,8 +37,11 @@ const app = {
   keys: new Set(),
   shake: new Map(), // bush index -> until (ms)
   sums: new Map(), // checkpoint tick -> checksum we computed ourselves
-  tool: 'look', // look | dumpling | grumble | berries | zap
   ring: [], // recent snapshots, to rewind when an edit arrives late
+  held: null, // creature being dragged: { id, x, y } in world units
+  moves: new Map(), // id -> { x, y, until } drop spot shown while the move travels
+  hurtFlash: new Map(), // id -> until (ms)
+  lastInput: 0,
 };
 app.feed = new EditFeed(e => onEditArrived(e));
 
@@ -52,7 +55,6 @@ setInterval(async () => {
     const mine = app.sums.get(meta.tick);
     if (mine && mine !== meta.checksum) {
       console.warn(`checkpoint ${meta.tick} differs (${mine} here, ${meta.checksum} on GitHub); reloading`);
-      try { localStorage.removeItem(LOCAL_KEY); } catch (e) { /* ignore */ }
       location.reload();
     }
   } catch (e) { /* offline is fine, keep going */ }
@@ -102,11 +104,6 @@ async function boot() {
   S.terrain(); S.scenery();
   let w = await fetchState('latest.json');
   if (w) app.snapshotTick = w.tick;
-  // a checkpoint this browser saved itself on an earlier visit may be newer
-  // (only trusted if it was made by exactly the same simulation code)
-  app.simHash = await simFingerprint();
-  const mine = loadLocalCheckpoint();
-  if (mine && (!w || mine.tick > w.tick) && mine.tick <= S.tickAt(Date.now())) w = mine;
   if (!w) w = S.genesis();
   app.w = w;
   // visitor edits made since that checkpoint, so we replay them too
@@ -114,7 +111,7 @@ async function boot() {
   app.feed.listen();
   await catchUp(true);
   T.warmup(seasonNow());
-  UI.init(app, { flyTo, select, deselect, pickRandom, setFollow, setTool, edit });
+  UI.init(app, { deselect });
   chooseStartView();
   app.live = true;
   UI.hideLoader();
@@ -129,7 +126,6 @@ function catchUp(first) {
       // stop at checkpoint boundaries so we can remember them
       const boundary = (Math.floor(app.w.tick / S.CHECKPOINT_TICKS) + 1) * S.CHECKPOINT_TICKS;
       S.advance(app.w, Math.min(target, boundary), 28, () => performance.now(), app.feed.editsAt);
-      if (app.w.tick === boundary) saveLocalCheckpoint();
       const done = app.w.tick >= target;
       const total = Math.max(1, target - start);
       const mins = Math.round((target - start) / S.TPS / 60);
@@ -158,49 +154,9 @@ async function resync() {
   resyncing = false;
 }
 
-// ---------------------------------------------------------------------------
-// local checkpoints: returning visitors resume from their own last checkpoint
-// when it is newer than GitHub's, which keeps loading fast even if the Action is late
-
-const LOCAL_KEY = 'wigglewood-checkpoint';
-async function simFingerprint() {
-  try {
-    const src = await (await fetch(new URL('../sim/core.js', import.meta.url))).text();
-    let h = 0x811c9dc5;
-    for (let i = 0; i < src.length; i++) { h ^= src.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-    return (h >>> 0).toString(16);
-  } catch (e) { return null; }
-}
-function loadLocalCheckpoint() {
-  try {
-    const raw = localStorage.getItem(LOCAL_KEY);
-    if (!raw || !app.simHash) return null;
-    const cut = raw.indexOf('|');
-    if (raw.slice(0, cut) !== app.simHash) return null;
-    return S.deserialize(raw.slice(cut + 1));
-  } catch (e) { return null; }
-}
-function saveLocalCheckpoint() {
-  if (!app.simHash) return;
-  try { localStorage.setItem(LOCAL_KEY, `${app.simHash}|${S.serialize(app.w)}`); } catch (e) { /* full or blocked */ }
-}
-
 function chooseStartView() {
-  const fromHash = parseInt(location.hash.slice(1), 10);
-  const c = Number.isFinite(fromHash) ? app.w.creatures.find(c => c.id === fromHash) : null;
   setZoom(defaultZoom());
-  if (c) { select(c.id, true); setFollow(true); app.cam.x = c.x; app.cam.y = c.y; return; }
-  if (Number.isFinite(fromHash)) UI.toast('That creature is no longer around. Here is everyone else.');
-  // start where the most creatures are
-  let best = null, bestN = -1;
-  const list = app.w.creatures;
-  for (let i = 0; i < list.length; i += 3) {
-    let n = 0;
-    for (const o of list) { const dx = o.x - list[i].x, dy = o.y - list[i].y; if (dx * dx + dy * dy < 250 * 250) n += o.s === 1 ? 3 : 1; }
-    if (n > bestN) { bestN = n; best = list[i]; }
-  }
-  if (best) { app.cam.x = best.x; app.cam.y = best.y; }
-  clampCam();
+  director.next(true);
 }
 
 function defaultZoom() {
@@ -217,7 +173,7 @@ function clampCam() {
 }
 
 function resize() {
-  app.dpr = Math.min(window.devicePixelRatio || 1, app.low ? 1 : 2);
+  app.dpr = Math.min(window.devicePixelRatio || 1, app.low ? 1 : 1.5);
   app.W = window.innerWidth; app.H = window.innerHeight;
   canvas.width = Math.round(app.W * app.dpr); canvas.height = Math.round(app.H * app.dpr);
   if (app.w) { setZoom(app.cam.z); clampCam(); }
@@ -247,7 +203,7 @@ function stepLive() {
       app.ring.push({ tick: app.w.tick, s: S.serialize(app.w) });
       if (app.ring.length > 15) app.ring.shift();
     }
-    if (app.w.tick % S.CHECKPOINT_TICKS === 0) { app.sums.set(app.w.tick, S.checksum(app.w)); saveLocalCheckpoint(); }
+    if (app.w.tick % S.CHECKPOINT_TICKS === 0) app.sums.set(app.w.tick, S.checksum(app.w));
     handleFx(app.w.fx, target - app.w.tick < 4);
   }
   if (n) UI.onTick(app);
@@ -274,43 +230,19 @@ function onEditArrived(e) {
   const target = app.w.tick;
   // checkpoints we passed since then were missing this edit
   for (const t of app.sums.keys()) if (t > snap.tick) app.sums.delete(t);
-  if (Math.floor(target / S.CHECKPOINT_TICKS) > Math.floor(snap.tick / S.CHECKPOINT_TICKS)) {
-    try { localStorage.removeItem(LOCAL_KEY); } catch (err) { /* ignore */ }
-  }
   app.w = S.deserialize(snap.s);
   S.advance(app.w, target, 0, null, app.feed.editsAt);
   app.prev.clear();
 }
 
 let busy = false;
-async function edit(payload, x, y) {
-  if (busy) return;
+async function edit(payload) {
+  if (busy) return false;
   busy = true;
-  if (x !== undefined) addParticle({ kind: 'pending', x, y, life: S.EDIT_DELAY / S.TPS + 1.5 });
   const err = await sendEdit(payload);
   busy = false;
   if (err) UI.toast(err);
-}
-
-function setTool(tool) {
-  app.tool = tool;
-  canvas.classList.toggle('editing', tool !== 'look');
-  UI.syncTool(app);
-}
-
-function useTool(sx, sy) {
-  const [x, y] = screenToWorld(sx, sy);
-  const t = app.tool;
-  if (t === 'zap') {
-    const c = creatureAt(sx, sy);
-    if (!c) { UI.toast('Tap right on a creature to zap it.'); return; }
-    edit({ k: 'zap', c: c.id }, c.x, c.y);
-  } else if (t === 'berries') {
-    edit({ k: 'berries', x, y }, x, y);
-  } else {
-    if (!S.walkable(x, y)) { UI.toast('That’s not solid ground. Try somewhere on land.'); return; }
-    edit({ k: 'spawn', s: t === 'grumble' ? S.GRUMBLE : S.DUMPLING, x, y, h: UI.pickedHue(t) }, x, y);
-  }
+  return !err;
 }
 
 function handleFx(fx, visible) {
@@ -337,10 +269,6 @@ function handleFx(fx, visible) {
         for (let i = 0; i < 6; i++) addParticle({ kind: 'puff', x: f.x + (Math.random() - 0.5) * 20, y: f.y - 10 - Math.random() * 10, vx: (Math.random() - 0.5) * 30, vy: -10 - Math.random() * 15, life: 0.8, r: 6 + Math.random() * 5 });
         break;
       case 'poof':
-        if (f.cause === 'zapped') {
-          addParticle({ kind: 'zap', x: f.x, y: f.y, life: 0.5 });
-          addParticle({ kind: 'text', text: 'ZAP!', x: f.x, y: f.y - 40, vy: -14, life: 1.1, size: 20, color: '#fff27a', rot: (Math.random() - 0.5) * 0.3 });
-        }
         for (let i = 0; i < 7; i++) addParticle({ kind: 'puff', x: f.x + (Math.random() - 0.5) * 20, y: f.y - 8 - Math.random() * 12, vx: (Math.random() - 0.5) * 30, vy: -8 - Math.random() * 12, life: 0.9, r: 5 + Math.random() * 6 });
         addParticle({ kind: 'ghost', x: f.x, y: f.y - 6, life: 2.6, s: f.s === 1 ? 1.2 : 0.9 });
         if (f.id === app.selected) UI.onSelectedDied(app, f);
@@ -350,16 +278,13 @@ function handleFx(fx, visible) {
         break;
       case 'yawn':
         break;
-      case 'spawned':
-        addParticle({ kind: 'sparkle', x: f.x, y: f.y - 14, life: 1.2 });
-        addParticle({ kind: 'text', text: 'POP!', x: f.x, y: f.y - 44, vy: -12, life: 1.1, size: 18, color: '#ffd23f' });
+      case 'dropped':
+        app.moves.delete(f.id);
+        for (let i = 0; i < 4; i++) addParticle({ kind: 'puff', x: f.x + (Math.random() - 0.5) * 24, y: f.y - 4, vx: (Math.random() - 0.5) * 40, vy: -6, life: 0.6, r: 4 + Math.random() * 4 });
         break;
-      case 'fed':
-        addParticle({ kind: 'text', text: 'yum', follow: f.id, dy: -40, life: 1.2, size: 16, color: '#8fe37a' });
-        break;
-      case 'refill':
-        app.shake.set(f.x * 7 + f.y, now + 400);
-        addParticle({ kind: 'sparkle', x: f.x, y: f.y - 16, life: 1 });
+      case 'ouch':
+        addParticle({ kind: 'text', text: ['OUCH', 'OW!', 'HEY!'][Math.floor(Math.random() * 3)], follow: f.id, dy: -44, life: 1, size: 18, color: '#ff8a8a', rot: (Math.random() - 0.5) * 0.4 });
+        app.hurtFlash.set(f.id, performance.now() + 300);
         break;
     }
     if (c && f.k === 'love') addParticle({ kind: 'sparkle', x: f.x, y: f.y - 10, life: 0.8 });
@@ -390,7 +315,8 @@ function byId(id) {
 // Quality adapts to the device: if drawing a frame takes too long we switch to
 // a lighter mode (1x pixels, 30 fps, fewer effects); if it gets cheap again we
 // switch back.
-app.low = (navigator.hardwareConcurrency || 8) <= 2 || (navigator.deviceMemory || 8) <= 2;
+// phones and small machines start light and only go fancy if they prove fast
+app.low = matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
 const perf = app.perf = { cost: 6, gap: 16, slowFor: 0, fastFor: 0, frame: 0 };
 const forcedQuality = new URLSearchParams(location.search).get('quality'); // 'high' | 'low' for testing
 if (forcedQuality) app.low = forcedQuality === 'low';
@@ -398,9 +324,9 @@ function adaptQuality(cost, dt) {
   perf.cost += (cost - perf.cost) * 0.05;
   perf.gap += (dt * 1000 - perf.gap) * 0.05; // time between frames we draw (includes painting)
   if (forcedQuality || document.hidden) return;
-  if (!app.low && (perf.cost > 13 || perf.gap > 30)) perf.slowFor += dt; else perf.slowFor = 0;
+  if (!app.low && (perf.cost > 10 || perf.gap > 24)) perf.slowFor += dt; else perf.slowFor = 0;
   if (app.low && perf.cost < 4) perf.fastFor += dt; else perf.fastFor = 0;
-  if (perf.slowFor > 2.5 || perf.fastFor > 20) {
+  if (perf.slowFor > 1.5 || perf.fastFor > 30) {
     app.low = !app.low;
     perf.slowFor = perf.fastFor = 0;
     resize();
@@ -432,7 +358,8 @@ function updateCamera(dt) {
   if (k.has('ArrowRight') || k.has('d')) mx += 1;
   if (k.has('ArrowUp') || k.has('w')) my -= 1;
   if (k.has('ArrowDown') || k.has('s')) my += 1;
-  if (mx || my) { app.cam.x += mx * pan; app.cam.y += my * pan; app.following = false; app.camTarget = null; UI.syncFollow(app); }
+  if (mx || my) { app.cam.x += mx * pan; app.cam.y += my * pan; app.following = false; app.camTarget = null; touched(); }
+  director.update();
   if (app.following && app.selected >= 0) {
     const p = renderPos(byId(app.selected), alphaNow());
     // keep the creature visible above the card on narrow screens
@@ -458,6 +385,9 @@ function alphaNow() {
 }
 function renderPos(c, a) {
   if (!c) return null;
+  if (app.held && app.held.id === c.id) return [app.held.x, app.held.y];
+  const mv = app.moves.get(c.id);
+  if (mv) { if (mv.until > performance.now()) return [mv.x, mv.y]; app.moves.delete(c.id); }
   const p = app.prev.get(c.id);
   if (!p) return [c.x, c.y];
   return [p[0] + (c.x - p[0]) * a, p[1] + (c.y - p[1]) * a];
@@ -548,6 +478,15 @@ function render(t, dt) {
     ctx.save();
     if (kind === 6) {
       ctx.translate(it[3][0], it[3][1]);
+      if (app.held && app.held.id === o.id) {
+        // lifted off the ground and dangling a little
+        ctx.fillStyle = 'rgba(20,30,20,0.22)';
+        ctx.beginPath(); ctx.ellipse(0, 0, S.radius(o), S.radius(o) * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.translate(0, -22);
+        ctx.rotate(Math.sin(t * 9) * 0.12);
+      }
+      const hurt = app.hurtFlash.get(o.id);
+      if (hurt && hurt > nowMs) ctx.translate(Math.sin(t * 70) * 3, 0);
       drawCreature(o, it[3], t, dt);
     } else {
       ctx.translate(o.x, o.y);
@@ -768,22 +707,7 @@ function drawParticles(t, dt) {
       case 'ghost':
         SP.drawGhost(ctx, k, p.s);
         break;
-      case 'pending': {
-        // dashed ring while the edit travels to everyone
-        ctx.setLineDash([5, 5]); ctx.lineDashOffset = -t * 30;
-        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
-        ctx.globalAlpha = k > 0.8 ? (1 - k) * 5 : 1;
-        ctx.beginPath(); ctx.ellipse(0, 0, 22, 9, 0, 0, Math.PI * 2); ctx.stroke();
-        ctx.strokeStyle = SP.INK; ctx.lineDashOffset = -t * 30 + 5; ctx.lineWidth = 1.5; ctx.stroke();
-        break;
-      }
-      case 'zap': {
-        ctx.globalAlpha = 1 - k;
-        ctx.strokeStyle = '#fff27a'; ctx.lineWidth = 6; ctx.lineJoin = 'miter';
-        ctx.beginPath(); ctx.moveTo(6, -120); ctx.lineTo(-8, -60); ctx.lineTo(6, -55); ctx.lineTo(-4, -2); ctx.stroke();
-        ctx.strokeStyle = SP.INK; ctx.lineWidth = 2; ctx.stroke();
-        break;
-      }
+
       case 'sparkle':
         ctx.globalAlpha = 1 - k;
         for (let j = 0; j < 4; j++) drawStar(Math.cos(j * 1.57 + k * 2) * (8 + k * 16), Math.sin(j * 1.57 + k * 2) * (8 + k * 12), 3.5 * (1 - k * 0.5));
@@ -967,17 +891,42 @@ function creatureAt(sx, sy) {
   return best;
 }
 
+// Gestures:
+//   drag empty ground: look around      pinch / wheel: zoom
+//   tap a creature: show who it is      double tap a creature: poke it
+//   press and hold a creature, then drag: pick it up and put it somewhere else
 const pointers = new Map();
 let drag = null;
+let lastTap = { t: 0, id: -1, x: 0, y: 0 };
+const HOLD_MS = 380;
+
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 1) drag = { x: e.clientX, y: e.clientY, cx: app.cam.x, cy: app.cam.y, t: performance.now(), moved: 0 };
-  else if (pointers.size === 2) {
+  touched();
+  if (pointers.size === 1) {
+    const c = creatureAt(e.clientX, e.clientY);
+    drag = { x: e.clientX, y: e.clientY, cx: app.cam.x, cy: app.cam.y, t: performance.now(), moved: 0, id: c ? c.id : -1 };
+    if (c) {
+      drag.timer = setTimeout(() => {
+        // still holding the same creature without having moved: pick it up
+        if (!drag || drag.moved > 10 || drag.pinch) return;
+        const cc = byId(drag.id);
+        if (!cc) return;
+        const [wx, wy] = screenToWorld(drag.x, drag.y);
+        app.held = { id: cc.id, x: wx, y: wy };
+        canvas.classList.add('holding');
+        if (navigator.vibrate) navigator.vibrate(15);
+      }, HOLD_MS);
+    }
+  } else if (pointers.size === 2) {
+    if (drag) clearTimeout(drag.timer);
+    app.held = null;
     const [p1, p2] = [...pointers.values()];
     drag = { pinch: true, d: Math.hypot(p1.x - p2.x, p1.y - p2.y), z: app.cam.z, moved: 99 };
   }
 });
+
 canvas.addEventListener('pointermove', e => {
   if (!pointers.has(e.pointerId)) {
     if (e.pointerType === 'mouse' && app.w) {
@@ -989,46 +938,79 @@ canvas.addEventListener('pointermove', e => {
   }
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (!drag) return;
+  touched();
   if (drag.pinch && pointers.size >= 2) {
     const [p1, p2] = [...pointers.values()];
     const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
-    zoomAt(mx, my, drag.z * d / drag.d / app.cam.z);
-  } else if (!drag.pinch) {
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy));
-    if (drag.moved > 6) {
-      canvas.classList.add('dragging');
-      app.cam.x = drag.cx - dx / app.cam.z; app.cam.y = drag.cy - dy / app.cam.z;
-      app.camTarget = null;
-      if (app.following) { app.following = false; UI.syncFollow(app); }
-      clampCam();
-    }
+    zoomAt((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, drag.z * d / drag.d / app.cam.z);
+    return;
+  }
+  if (drag.pinch) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy));
+  if (app.held) {
+    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
+    app.held.x = wx; app.held.y = wy;
+    return;
+  }
+  if (drag.moved > 8) {
+    clearTimeout(drag.timer);
+    canvas.classList.add('dragging');
+    app.cam.x = drag.cx - dx / app.cam.z; app.cam.y = drag.cy - dy / app.cam.z;
+    app.camTarget = null;
+    app.following = false;
+    clampCam();
   }
 });
+
 function endPointer(e) {
   if (!pointers.has(e.pointerId)) return;
   pointers.delete(e.pointerId);
-  canvas.classList.remove('dragging');
-  if (drag && !drag.pinch && drag.moved <= 6 && performance.now() - drag.t < 600 && e.type === 'pointerup') {
-    const c = creatureAt(e.clientX, e.clientY);
-    if (app.tool !== 'look') useTool(e.clientX, e.clientY);
-    else if (c) select(c.id, false); else deselect();
+  canvas.classList.remove('dragging', 'holding');
+  if (drag) clearTimeout(drag.timer);
+  if (app.held && e.type === 'pointerup') {
+    // put it down: everyone sees it land a few seconds later
+    const h = app.held;
+    app.held = null;
+    if (!S.walkable(h.x, h.y)) UI.toast('It can only go on solid ground.');
+    else {
+      app.moves.set(h.id, { x: h.x, y: h.y, until: performance.now() + (S.EDIT_DELAY / S.TPS + 3) * 1000 });
+      edit({ k: 'move', c: h.id, x: h.x, y: h.y }).then(ok => { if (!ok) app.moves.delete(h.id); });
+    }
+  } else if (drag && !drag.pinch && drag.moved <= 8 && performance.now() - drag.t < 500 && e.type === 'pointerup') {
+    tap(e.clientX, e.clientY);
   }
+  app.held = e.type === 'pointerup' ? null : app.held;
   if (pointers.size === 1) {
     const [p] = [...pointers.values()];
     drag = { x: p.x, y: p.y, cx: app.cam.x, cy: app.cam.y, t: 0, moved: 99 };
   } else if (pointers.size === 0) drag = null;
 }
+
+function tap(sx, sy) {
+  const c = creatureAt(sx, sy);
+  const now = performance.now();
+  const double = c && lastTap.id === c.id && now - lastTap.t < 350 && Math.abs(sx - lastTap.x) + Math.abs(sy - lastTap.y) < 40;
+  lastTap = { t: now, id: c ? c.id : -1, x: sx, y: sy };
+  if (double) {
+    lastTap.t = 0;
+    edit({ k: 'poke', c: c.id }).then(ok => { if (ok) addParticle({ kind: 'text', text: '!', follow: c.id, dy: -30, life: 0.5, size: 16, color: '#ffffff' }); });
+    return;
+  }
+  if (c) select(c.id);
+  else deselect();
+}
+
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { app.hover = -1; });
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
+  touched();
   const dz = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0016));
   zoomAt(e.clientX, e.clientY, dz);
 }, { passive: false });
-canvas.addEventListener('dblclick', e => zoomAt(e.clientX, e.clientY, 1.8));
+canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 function zoomAt(sx, sy, factor) {
   const [wx, wy] = screenToWorld(sx, sy);
@@ -1049,42 +1031,64 @@ window.addEventListener('keydown', e => {
     app.keys.add(k); e.preventDefault();
   } else if (k === '+' || k === '=') zoomAt(app.W / 2, app.H / 2, 1.25);
   else if (k === '-' || k === '_') zoomAt(app.W / 2, app.H / 2, 0.8);
-  else if (k === 'f' && app.selected >= 0) setFollow(!app.following);
-  else if (k === 'Escape') { if (app.tool !== 'look') setTool('look'); else if (!UI.closePanels()) deselect(); }
+  else if (k === 'Escape') deselect();
 });
 window.addEventListener('keyup', e => app.keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
 window.addEventListener('blur', () => app.keys.clear());
 
-function select(id, follow) {
+function select(id) {
   app.selected = id;
-  if (follow) setFollow(true);
-  history.replaceState(null, '', `#${id}`);
+  app.following = true;
+  if (app.cam.z < 1.3) app.camTarget = { x: app.cam.x, y: app.cam.y, z: 1.5 };
   UI.showCard(app);
 }
 function deselect() {
   app.selected = -1;
   app.following = false;
-  history.replaceState(null, '', location.pathname + location.search);
   UI.hideCard();
 }
-function setFollow(on) {
-  app.following = on && app.selected >= 0;
-  if (app.following && app.cam.z < 1.4) app.camTarget = { x: app.cam.x, y: app.cam.y, z: Math.max(app.cam.z, 1.6) };
-  UI.syncFollow(app);
-}
-function flyTo(x, y, z) {
-  app.following = false;
-  app.camTarget = { x, y, z: z || Math.max(app.cam.z, 1.4) };
-  UI.syncFollow(app);
-}
-function pickRandom(species) {
-  const pool = app.w.creatures.filter(c => (species === undefined || c.s === species));
-  if (!pool.length) { UI.toast(species === 1 ? 'There are no grumbles right now.' : 'Nobody is around right now.'); return; }
-  // prefer someone who is up to something
-  const busy = pool.filter(c => c.st !== S.ST.SLEEP && c.st !== S.ST.WANDER);
-  const list = busy.length && Math.random() < 0.7 ? busy : pool;
-  const c = list[Math.floor(Math.random() * list.length)];
-  select(c.id, true);
-}
+
+// ---------------------------------------------------------------------------
+// the director: when nobody touches anything, the camera wanders from one
+// interesting creature to the next so the island is nice to just watch
+
+function touched() { app.lastInput = performance.now(); director.until = 0; }
+const director = {
+  id: -1, until: 0,
+  idle() { return performance.now() - app.lastInput > 15000 && app.selected < 0; },
+  next(first) {
+    const list = app.w.creatures;
+    if (!list.length) return;
+    const score = c => {
+      let v = Math.random();
+      if (c.st === S.ST.HUNT || c.st === S.ST.FLEE) v += 3;
+      if (c.st === S.ST.MATE) v += 2;
+      if (c.st === S.ST.FOLLOW || c.age < 1200) v += 1.2;
+      if (c.s === 1) v += 0.6;
+      if (c.st === S.ST.SLEEP) v -= 1;
+      return v;
+    };
+    let best = null, bv = -1e9;
+    for (const c of list) { const v = score(c); if (v > bv) { bv = v; best = c; } }
+    this.id = best.id;
+    this.until = performance.now() + 25000 + Math.random() * 20000;
+    if (first) { app.cam.x = best.x; app.cam.y = best.y; clampCam(); }
+  },
+  update() {
+    if (!this.idle()) return;
+    const c = byId(this.id);
+    const now = performance.now();
+    if (!c) { if (!this.lostAt) this.lostAt = now; if (now - this.lostAt > 3000) { this.lostAt = 0; this.next(); } return; }
+    this.lostAt = 0;
+    if (now > this.until && c.st !== S.ST.HUNT && c.st !== S.ST.FLEE) { this.next(); return; }
+    const p = renderPos(c, alphaNow());
+    const ease = 0.02;
+    app.cam.x += (p[0] - app.cam.x) * ease;
+    app.cam.y += (p[1] - 20 - app.cam.y) * ease;
+    const zWant = Math.max(minZoom(), Math.min(2, defaultZoom() * 1.15));
+    app.cam.z += (zWant - app.cam.z) * 0.01;
+    clampCam();
+  },
+};
 
 boot();

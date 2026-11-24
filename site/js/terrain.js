@@ -46,9 +46,21 @@ export function renderTile(season, z, tx, ty) {
   const P = PALETTES[season];
   const N = TILE + 2;
   const { elev, moist } = S.terrain();
+  // the bicubic field is the expensive part: sample it every 2 px and fill in
+  // between with cheap bilinear interpolation (the field is smooth anyway)
+  const CS = 2, CN = (TILE >> 1) + 3;
+  const C = new Float32Array(CN * CN);
+  for (let j = 0; j < CN; j++) for (let i = 0; i < CN; i++) {
+    C[j * CN + i] = S.sampleField(elev, wx0 + (i * CS - 2) * ps, wy0 + (j * CS - 2) * ps);
+  }
   const E = new Float32Array(N * N);
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    E[j * N + i] = S.sampleField(elev, wx0 + (i - 0.5) * ps, wy0 + (j - 0.5) * ps);
+  for (let j = 0; j < N; j++) {
+    const cy = (j - 0.5 + 2) / CS, cj = Math.floor(cy), fy = cy - cj;
+    for (let i = 0; i < N; i++) {
+      const cx = (i - 0.5 + 2) / CS, ci = Math.floor(cx), fx = cx - ci;
+      const o = cj * CN + ci;
+      E[j * N + i] = (C[o] * (1 - fx) + C[o + 1] * fx) * (1 - fy) + (C[o + CN] * (1 - fx) + C[o + CN + 1] * fx) * fy;
+    }
   }
   // moisture is smooth, sample it on a coarse grid and interpolate
   const MS = 8, MN = TILE / MS + 2;

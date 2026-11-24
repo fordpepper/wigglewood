@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Wigglewood</title>
-<meta name="description" content="A tiny shared ecosystem of dumplings and grumbles that keeps living on its own. Everyone who opens it sees the same world.">
+<meta name="description" content="A tiny shared island of dumplings and grumbles that keeps living on its own. Everyone sees the same world.">
 <meta name="theme-color" content="#74caf2">
 <meta property="og:title" content="Wigglewood">
 <meta property="og:description" content="A tiny shared island of dumplings and grumbles that keeps living on its own. Everyone sees the same world.">
@@ -16,124 +16,19 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<canvas id="world" aria-label="The island of Wigglewood, seen from above. Drag to look around, scroll or pinch to zoom, click a creature to meet it."></canvas>
+<canvas id="world" aria-label="The island of Wigglewood. Drag to look around, pinch or scroll to zoom. Tap a creature to meet it, double tap to poke it, press and hold to pick it up and move it."></canvas>
 
-<header class="hud-top">
-  <div class="title-tag">
-    <h1>Wigglewood</h1>
-    <div class="clock">
-      <span id="clock-time">--:--</span>
-      <span id="clock-season" class="chip">spring</span>
-      <span id="clock-weather" class="chip">clear</span>
-    </div>
-  </div>
-  <nav class="buttons">
-    <button id="btn-random" class="btn btn-main" type="button">Meet someone</button>
-    <button id="btn-graph" class="btn" type="button" aria-expanded="false" aria-controls="graph-panel">History</button>
-    <button id="btn-help" class="btn btn-round" type="button" aria-expanded="false" aria-controls="help-panel" aria-label="About Wigglewood">?</button>
-  </nav>
-</header>
-
-<div class="tools" role="toolbar" aria-label="Change the island" aria-orientation="vertical">
-  <button class="tool on" type="button" data-tool="look" aria-pressed="true" title="Look around">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 16c4-7 9-10 13-10s9 3 13 10c-4 7-9 10-13 10S7 23 3 16z" fill="#fff" stroke="#141414" stroke-width="3" stroke-linejoin="round"/><circle cx="16" cy="16" r="5" fill="#141414"/></svg>
-    <span>Look</span>
-  </button>
-  <button class="tool" type="button" data-tool="dumpling" aria-pressed="false" title="Drop in a dumpling">
-    <canvas width="44" height="44" data-portrait="0" aria-hidden="true"></canvas><span>Dumpling</span>
-  </button>
-  <button class="tool" type="button" data-tool="grumble" aria-pressed="false" title="Drop in a grumble">
-    <canvas width="44" height="44" data-portrait="1" aria-hidden="true"></canvas><span>Grumble</span>
-  </button>
-  <button class="tool" type="button" data-tool="berries" aria-pressed="false" title="Fill a bush with berries">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4c-1 5-3 7-6 9M16 4c2 4 5 6 8 7" fill="none" stroke="#2f7a2f" stroke-width="3" stroke-linecap="round"/><circle cx="10" cy="19" r="6" fill="#e8344e" stroke="#141414" stroke-width="2.5"/><circle cx="21" cy="21" r="6" fill="#e8344e" stroke="#141414" stroke-width="2.5"/><circle cx="16" cy="12" r="5" fill="#e8344e" stroke="#141414" stroke-width="2.5"/></svg>
-    <span>Berries</span>
-  </button>
-  <button class="tool" type="button" data-tool="zap" aria-pressed="false" title="Zap a creature">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M19 2 7 18h8l-3 12 13-17h-8z" fill="#fff27a" stroke="#141414" stroke-width="2.5" stroke-linejoin="round"/></svg>
-    <span>Zap</span>
-  </button>
-  <div class="swatches" id="swatches" hidden role="group" aria-label="Colour for new creatures"></div>
-</div>
-
-<section id="feed" class="feed" aria-live="polite" aria-label="What's happening"></section>
-
-<footer class="counts" aria-label="Population">
-  <button class="count" id="count-d" type="button" title="Show a random dumpling"><canvas width="44" height="44" data-portrait="0"></canvas><b id="n-d">0</b><span>dumplings</span></button>
-  <button class="count" id="count-g" type="button" title="Show a random grumble"><canvas width="44" height="44" data-portrait="1"></canvas><b id="n-g">0</b><span>grumbles</span></button>
-  <div class="count count-berries"><i class="berry-dot"></i><b id="n-b">0</b><span>berries</span></div>
-</footer>
+<div class="clock" id="clock">--:--</div>
 
 <aside id="card" class="card" hidden aria-label="Creature details">
-  <button class="card-close" id="card-close" type="button" aria-label="Close">×</button>
-  <div class="card-head">
-    <canvas id="portrait" width="220" height="200"></canvas>
-    <div>
-      <h2 id="c-name">Name</h2>
-      <p id="c-kind" class="c-kind"></p>
-      <p id="c-status" class="c-status"></p>
-    </div>
-  </div>
-  <div class="bars">
-    <label>Tummy<span class="bar"><i id="c-energy"></i></span></label>
-    <label>Age<span class="bar"><i id="c-age"></i></span></label>
-  </div>
-  <h3>Genes</h3>
-  <div class="genes" id="c-genes"></div>
-  <dl class="facts" id="c-facts"></dl>
-  <div class="card-actions">
-    <button id="btn-follow" class="btn btn-main" type="button">Follow</button>
-    <button id="btn-share" class="btn" type="button">Copy link</button>
-  </div>
-  <div class="card-actions card-edit">
-    <button id="btn-feed" class="btn" type="button">Feed</button>
-    <button id="btn-zap" class="btn btn-danger" type="button">Zap</button>
+  <canvas id="portrait" width="160" height="150" aria-hidden="true"></canvas>
+  <div class="card-text">
+    <h2 id="c-name">Name</h2>
+    <p id="c-kind" class="c-kind"></p>
+    <p id="c-status" class="c-status"></p>
+    <span class="bar" title="Tummy"><i id="c-energy"></i></span>
   </div>
 </aside>
-
-<section id="graph-panel" class="panel graph-panel" hidden>
-  <button class="card-close" data-close="graph-panel" type="button" aria-label="Close">×</button>
-  <h2>How Wigglewood is doing</h2>
-  <div class="tabs" role="tablist">
-    <button role="tab" class="tab" data-view="pop" aria-selected="true">Population</button>
-    <button role="tab" class="tab" data-view="genes" aria-selected="false">Evolution</button>
-  </div>
-  <div class="tabs ranges" role="group" aria-label="Time range">
-    <button class="tab" data-range="6" aria-pressed="true">6 hours</button>
-    <button class="tab" data-range="24" aria-pressed="false">24 hours</button>
-    <button class="tab" data-range="all" aria-pressed="false">All time</button>
-  </div>
-  <div class="chart-wrap">
-    <canvas id="chart"></canvas>
-    <div id="chart-tip" class="chart-tip" hidden></div>
-  </div>
-  <p class="chart-note" id="chart-note"></p>
-  <dl class="facts stats" id="stats"></dl>
-</section>
-
-<section id="help-panel" class="panel help-panel" hidden>
-  <button class="card-close" data-close="help-panel" type="button" aria-label="Close">×</button>
-  <h2>What is this?</h2>
-  <p>Wigglewood is a little island that never stops. Dumplings eat berries, grumbles eat dumplings, and both have babies that inherit their parents' genes with small changes. Over time the island figures out what works.</p>
-  <p>It's the same world for everyone. The whole island is worked out from the current time, so if you and a friend open it at the same moment you'll see the same creatures in the same places. Close the tab and come back tomorrow: life carried on without you.</p>
-  <p>The sky follows your own clock, so it's night here when it's night where you are. Seasons belong to the island: each one lasts three hours.</p>
-  <h3>Changing things</h3>
-  <p>Use the tools on the right to drop in dumplings or grumbles, fill a bush with berries, or zap a creature. Changes show up for everyone a few seconds later. The whole island shares a limit of 40 changes a minute.</p>
-  <h3>Looking around</h3>
-  <ul>
-    <li>Drag to move, scroll or pinch to zoom.</li>
-    <li>Click a creature to see its genes, family and mood.</li>
-    <li>Arrow keys or WASD pan, + and − zoom, F follows, Esc lets go.</li>
-  </ul>
-  <h3>The genes</h3>
-  <ul>
-    <li><b>Size</b>: bigger stores more food and is harder to catch, but burns energy fast.</li>
-    <li><b>Speed</b>: outrun or run down, at a cost.</li>
-    <li><b>Sight</b>: spot food and danger from further away.</li>
-    <li>Colour, eyes, patterns and hats drift over generations, so you can see families.</li>
-  </ul>
-  <p class="small">Every 30 minutes a GitHub Action moves the island forward and saves a checkpoint to the repository; your browser picks it up and simulates the last few minutes itself. <span id="sync-info"></span></p>
-</section>
 
 <div id="loader" class="loader" role="status">
   <canvas id="loader-art" width="160" height="140" aria-hidden="true"></canvas>

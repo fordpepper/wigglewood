@@ -28,18 +28,20 @@ the same places. No accounts, no server, just GitHub.
   raw.githubusercontent.com), simulates the remaining minutes itself, and then
   keeps running in real time. State is round-tripped through JSON at every
   checkpoint, so a browser that started from an older checkpoint follows exactly
-  the same path as the Action. Browsers also keep their own latest checkpoint
-  so returning visitors load fast, and they compare checksums with GitHub's
-  checkpoints to catch any drift.
+  the same path as the Action. Browsers compare checksums with GitHub's checkpoints
+  to catch any drift.
 - Pushing to `main` publishes the page to GitHub Pages (`world.yml`).
-- **Visitor edits** (zap, feed, drop in a creature, refill a bush) are posted to
-  a public [ntfy.sh](https://ntfy.sh) topic, so nobody needs an account. Each edit
-  names the tick it takes effect on, three seconds ahead, and whether it counts
-  is decided only from the edit and ntfy's timestamp, so every browser and the
-  heartbeat apply exactly the same edits at the same moment. A browser that hears
-  about an edit late rewinds to a snapshot from a few seconds earlier and replays.
-  The island accepts at most 40 edits a minute in total. Anyone can post to the
-  topic, so the island can be messed with; that is the price of no logins.
+- **Visitors can meddle**: tap a creature to see who it is, double tap to poke it
+  (enough pokes and it's gone), press and hold to pick it up and drop it somewhere
+  else. Edits are posted to a public [ntfy.sh](https://ntfy.sh) topic, so nobody
+  needs an account. Each edit names the tick it takes effect on, three seconds
+  ahead, and whether it counts is decided only from the edit and ntfy's
+  timestamp, so every browser and the heartbeat apply exactly the same edits at
+  the same moment. A browser that hears about an edit late rewinds a few seconds
+  and replays. The island accepts at most 40 edits a minute in total.
+- When nobody touches anything for a while the camera drifts from one
+  interesting creature to the next, so it works as something to just watch.
+- No cookies and no local storage: nothing is saved in your browser.
 - Slow devices switch to a light mode automatically (1x pixels, 30 fps, fewer
   effects). `?quality=low` or `?quality=high` forces one.
 - Day and night follow the viewer's own clock (that part is only drawn, not
