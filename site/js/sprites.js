@@ -405,12 +405,17 @@ export function rock(rk, season, u, tint = 0) {
 
 // berry bushes look different on every kind of land:
 // 0 leafy, 1 prickly pear (desert), 2 jungle fruit, 3 low lingonberry (cold), 4 savanna, 5 bog blueberry
+// (remembered here rather than on the bush: bushes are part of the shared world state)
+const bushKinds = new Map();
 export function bushKind(b) {
-  if (b._k === undefined) {
+  const key = b.x * 100000 + b.y;
+  let k = bushKinds.get(key);
+  if (k === undefined) {
     const bi = S.biomeAt(b.x, b.y), B = S.BIOME;
-    b._k = bi === B.DESERT ? 1 : bi === B.JUNGLE ? 2 : bi === B.TAIGA || bi === B.TUNDRA ? 3 : bi === B.SAVANNA ? 4 : bi === B.SWAMP ? 5 : 0;
+    k = bi === B.DESERT ? 1 : bi === B.JUNGLE ? 2 : bi === B.TAIGA || bi === B.TUNDRA ? 3 : bi === B.SAVANNA ? 4 : bi === B.SWAMP ? 5 : 0;
+    bushKinds.set(key, k);
   }
-  return b._k;
+  return k;
 }
 const BUSH = [hex('#4fb24c'), hex('#47a446'), hex('#8a9a3c'), hex('#6b8a6a')];
 const BERRIES = [BERRY, hex('#ff5fa0'), hex('#ff9a2a'), hex('#e02c3c'), hex('#e8344e'), hex('#5b5ee8')];
