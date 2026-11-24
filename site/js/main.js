@@ -2,7 +2,6 @@ import * as S from '../sim/core.js';
 import * as T from './terrain.js';
 import * as SP from './sprites.js';
 import * as UI from './ui.js';
-import { EditFeed, sendEdit } from './edits.js';
 import { PX, textSprite, textWidth, INK, INK_CSS as SP_INK, hex } from './pixel.js';
 
 const canvas = document.getElementById('world');
@@ -29,36 +28,17 @@ const app = {
   lastFrame: performance.now(),
   keys: new Set(),
   shake: new Map(), // bush index -> until (ms)
-  sums: new Map(), // checkpoint tick -> checksum we computed ourselves
-  ring: [], // recent snapshots, to rewind when an edit arrives late
-  held: null, // creature being dragged: { id, x, y } in world units
-  moves: new Map(), // id -> { x, y, until } drop spot shown while the move travels
-  hurtFlash: new Map(), // id -> until (ms)
   lastInput: 0,
   zoomedAt: 0,
   view: { L: 0, k: 3, u: 1 / PX },
 };
-app.feed = new EditFeed(e => onEditArrived(e));
-
-// Every few minutes compare our own checkpoint with the one GitHub saved. If they
-// ever disagree (say the rules changed while this tab was open) start over from theirs.
-setInterval(async () => {
-  if (!app.live || document.visibilityState !== 'visible') return;
-  try {
-    const meta = await fetchState('meta.json');
-    if (!meta) return;
-    const mine = app.sums.get(meta.tick);
-    if (mine && mine !== meta.checksum) {
-      console.warn(`checkpoint ${meta.tick} differs (${mine} here, ${meta.checksum} on GitHub); reloading`);
-      location.reload();
-    }
-  } catch (e) { /* offline is fine, keep going */ }
-}, 5 * 60 * 1000);
 window.__wigglewood = app; // handy for poking around in the console
 
 // The heartbeat workflow keeps the newest checkpoint on the repo's `state`
 // branch; read it straight from there (it changes without a Pages deploy) and
-// fall back to the copy bundled with the site.
+// fall back to the copy bundled with the site. This is the only time the page
+// talks to the network: once it's loaded, the world runs entirely on this
+// device (it's a pure function of time, so it stays in step with everyone).
 function stateSources() {
   const out = [];
   const m = location.hostname.match(/^([^.]+)\.github\.io$/);
@@ -75,9 +55,7 @@ async function fetchState(file) {
     try {
       const res = await fetch(`${base}${file}?t=${Date.now()}`, { cache: 'no-store' });
       if (!res.ok) continue;
-      const text = await res.text();
-      if (file === 'meta.json') return JSON.parse(text);
-      const w = S.deserialize(text);
+      const w = S.deserialize(await res.text());
       if (!best || w.tick > best.tick) best = w;
       if (base !== 'state/') break; // the branch copy is the newest there is
     } catch (e) { /* try the next source */ }
@@ -96,14 +74,13 @@ function seasonNow() { return previewSeason ?? S.seasonIndex(app.w.tick); }
 async function boot() {
   resize();
   UI.drawLoaderArt(0);
+  // load both font weights now, so nothing is fetched once the world is running
+  await Promise.all([document.fonts.load('700 1em "Pixelify Sans"'), document.fonts.load('400 1em "Pixelify Sans"')]).catch(() => {});
   S.terrain(); S.scenery();
   let w = await fetchState('latest.json');
   if (w) app.snapshotTick = w.tick;
   if (!w) w = S.genesis();
   app.w = w;
-  // visitor edits made since that checkpoint, so we replay them too
-  await app.feed.backfill(S.msAt(w.tick) / 1000 - 90);
-  app.feed.listen();
   await catchUp(true);
   T.warmup(seasonNow());
   UI.init(app, { deselect });
@@ -120,7 +97,7 @@ function catchUp(first) {
       const target = S.tickAt(Date.now());
       // stop at checkpoint boundaries so we can remember them
       const boundary = (Math.floor(app.w.tick / S.CHECKPOINT_TICKS) + 1) * S.CHECKPOINT_TICKS;
-      S.advance(app.w, Math.min(target, boundary), 28, () => performance.now(), app.feed.editsAt);
+      S.advance(app.w, Math.min(target, boundary), 28, () => performance.now());
       const done = app.w.tick >= target;
       const total = Math.max(1, target - start);
       const mins = Math.round((target - start) / S.TPS / 60);
@@ -136,13 +113,11 @@ function catchUp(first) {
 
 let resyncing = false;
 async function resync() {
-  // called when the tab comes back after a long sleep: grab a fresher checkpoint if there is one
+  // the tab was asleep for a while: simulate what happened meanwhile, right here
   if (resyncing) return;
   resyncing = true;
   app.live = false;
   UI.showLoader();
-  const w = await fetchState('latest.json');
-  if (w && w.tick > app.w.tick) { app.w = w; app.snapshotTick = w.tick; }
   await catchUp(false);
   app.live = true;
   UI.hideLoader();
@@ -159,7 +134,7 @@ function defaultZoom() {
   const cssPerArt = Math.min(app.W, app.H) >= 700 ? 3 : 2;
   return snapZoom(cssPerArt / PX);
 }
-function minZoom() { return 0.8 * Math.min(app.W / S.WORLD_W, app.H / S.WORLD_H); }
+function minZoom() { return 0.6 * Math.min(app.W / S.WORLD_W, app.H / S.WORLD_H); } // room to see the whole world
 function maxZoom() { return 4; }
 function setZoom(z) { app.cam.z = Math.max(minZoom(), Math.min(maxZoom(), z)); }
 function clampCam() {
@@ -193,52 +168,17 @@ function stepLive() {
   while (app.w.tick < target && n < 60) {
     app.prev.clear();
     for (const c of app.w.creatures) app.prev.set(c.id, [c.x, c.y]);
-    S.step(app.w, app.feed.editsAt(app.w.tick + 1));
+    S.step(app.w);
     n++;
-    if (app.w.tick % 40 === 0) {
-      app.ring.push({ tick: app.w.tick, s: S.serialize(app.w) });
-      if (app.ring.length > 15) app.ring.shift();
-    }
-    if (app.w.tick % S.CHECKPOINT_TICKS === 0) app.sums.set(app.w.tick, S.checksum(app.w));
     handleFx(app.w.fx, target - app.w.tick < 4);
   }
   if (n) UI.onTick(app);
-  if (n && app.w.tick % 2400 === 0) app.feed.prune(app.w.tick - 7200);
   // forget render state of creatures that are gone
   if (n && app.w.tick % 240 === 0) {
     const alive = new Set(app.w.creatures.map(c => c.id));
     for (const m of [app.facing, app.walk, app.look]) for (const id of m.keys()) if (!alive.has(id)) m.delete(id);
     for (const id of app.seen) if (!alive.has(id)) app.seen.delete(id);
   }
-}
-
-// ---------------------------------------------------------------------------
-// visitor edits
-
-// an edit from anyone (including us) arrived
-function onEditArrived(e) {
-  if (!app.w || e.t > app.w.tick) return; // still in the future: it'll be applied on time
-  // it should already have happened: rewind to a snapshot before it and replay
-  let snap = null;
-  for (let i = app.ring.length - 1; i >= 0; i--) if (app.ring[i].tick < e.t) { snap = app.ring[i]; break; }
-  if (!snap) { console.warn('edit arrived too late to replay', e); return; }
-  app.ring = app.ring.filter(r => r.tick <= snap.tick);
-  const target = app.w.tick;
-  // checkpoints we passed since then were missing this edit
-  for (const t of app.sums.keys()) if (t > snap.tick) app.sums.delete(t);
-  app.w = S.deserialize(snap.s);
-  S.advance(app.w, target, 0, null, app.feed.editsAt);
-  app.prev.clear();
-}
-
-let busy = false;
-async function edit(payload) {
-  if (busy) return false;
-  busy = true;
-  const err = await sendEdit(payload);
-  busy = false;
-  if (err) UI.toast(err);
-  return !err;
 }
 
 function handleFx(fx, visible) {
@@ -273,14 +213,6 @@ function handleFx(fx, visible) {
         addParticle({ kind: 'text', text: '!?', follow: f.id, dy: -46, life: 1.2, size: 18, color: '#ffffff' });
         break;
       case 'yawn':
-        break;
-      case 'dropped':
-        app.moves.delete(f.id);
-        for (let i = 0; i < 4; i++) addParticle({ kind: 'puff', x: f.x + (Math.random() - 0.5) * 24, y: f.y - 4, vx: (Math.random() - 0.5) * 40, vy: -6, life: 0.6, r: 4 + Math.random() * 4 });
-        break;
-      case 'ouch':
-        addParticle({ kind: 'text', text: ['OUCH', 'OW!', 'HEY!'][Math.floor(Math.random() * 3)], follow: f.id, dy: -44, life: 1, size: 18, color: '#ff8a8a', rot: (Math.random() - 0.5) * 0.4 });
-        app.hurtFlash.set(f.id, performance.now() + 300);
         break;
     }
     if (c && f.k === 'love') addParticle({ kind: 'sparkle', x: f.x, y: f.y - 10, life: 0.8 });
@@ -356,13 +288,25 @@ function viewParams(z = app.cam.z) {
   while (L < T.MAX_LEVEL && s * (1 << L) < 1.999) L++;
   return { L, k: s * (1 << L), u: 1 / (PX << L) };
 }
+// every crisp zoom: whole device pixels per art pixel at some level
+let STEPS = null;
+function zoomSteps() {
+  if (STEPS) return STEPS;
+  const set = new Set();
+  for (let L = T.MAX_LEVEL; L >= 1; L--) for (let k = 2; k <= (L === T.MAX_LEVEL ? 7 : 3); k++) set.add(k / (1 << L));
+  for (let k = 2; k <= 64; k++) set.add(k);
+  return (STEPS = [...set].sort((a, b) => a - b));
+}
 function snapZoom(z) {
   const s = z * app.dpr * PX;
   const toZ = v => v / (app.dpr * PX);
-  let v = s >= 1 ? Math.max(1, Math.round(s)) : Math.pow(2, Math.round(Math.log2(s)));
-  while (toZ(v) < minZoom() - 1e-9) v = v >= 1 ? v + 1 : v * 2;
-  while (toZ(v) > maxZoom() + 1e-9) v = v > 1 ? v - 1 : v / 2;
-  return toZ(v);
+  let best = null, bd = Infinity;
+  for (const v of zoomSteps()) {
+    if (toZ(v) < minZoom() - 1e-9 || toZ(v) > maxZoom() + 1e-9) continue;
+    const d = Math.abs(Math.log(v / s));
+    if (d < bd) { bd = d; best = v; }
+  }
+  return best === null ? z : toZ(best);
 }
 
 function updateCamera(dt) {
@@ -406,9 +350,6 @@ function alphaNow() {
 }
 function renderPos(c, a) {
   if (!c) return null;
-  if (app.held && app.held.id === c.id) return [app.held.x, app.held.y];
-  const mv = app.moves.get(c.id);
-  if (mv) { if (mv.until > performance.now()) return [mv.x, mv.y]; app.moves.delete(c.id); }
   const p = app.prev.get(c.id);
   if (!p) return [c.x, c.y];
   return [p[0] + (c.x - p[0]) * a, p[1] + (c.y - p[1]) * a];
@@ -454,20 +395,13 @@ function render(t, dt) {
   drawCloudShadows(t, view, u, w);
 
   // everything that stands up, sorted by where it touches the ground
-  const sc = S.scenery();
   const items = [];
   const padX = 40, padTop = 10, padBot = 70; // art pixels
   const vx0 = (view.x0 - padX) / u, vx1 = (view.x1 + padX) / u, vy0 = (view.y0 - padTop) / u, vy1 = (view.y1 + padBot) / u;
   const inView = (x, y) => x > vx0 && x < vx1 && y > vy0 && y < vy1;
   const sun = localDaylight();
   const night = 1 - sun.day;
-  if (L < T.BAKE_LEVEL) { // further out these are baked into the ground tiles
-    for (const tr of sc.trees) if (inView(tr.x, tr.y)) items.push([tr.y, 0, tr]);
-    for (const rk of sc.rocks) if (inView(rk.x, rk.y)) items.push([rk.y, 1, rk]);
-    for (const m of sc.mushrooms) if (inView(m.x, m.y)) items.push([m.y, 3, m]);
-    for (const r of sc.reeds) if (inView(r.x, r.y)) items.push([r.y, 4, r]);
-    for (const sh of sc.shrubs) if (inView(sh.x, sh.y)) items.push([sh.y, 7, sh]);
-  }
+  if (L < T.BAKE_LEVEL) T.sceneryIn(vx0, vy0, vx1, vy1, it => items.push(it)); // further out they're baked into the ground tiles
   w.bushes.forEach((b, i) => { if (inView(b.x, b.y)) items.push([b.y, 2, b, i]); });
   for (const gv of w.graves) if (inView(gv.x, gv.y)) items.push([gv.y, 5, gv]);
   const drawn = [];
@@ -497,23 +431,17 @@ function render(t, dt) {
     const kind = it[1], o = it[2];
     if (kind === 6) {
       const p = it[3];
-      let X = Math.round(p[0] * u), Y = Math.round(p[1] * u);
-      if (app.held && app.held.id === o.id) {
-        SP.drawShadow(ctx, X, Y, S.radius(o) * u);
-        Y -= Math.max(3, Math.round(22 * u));
-        X += Math.round(Math.sin(t * 9));
-      } else SP.drawShadow(ctx, X, Y, S.radius(o) * u * 0.95);
-      const hurt = app.hurtFlash.get(o.id);
-      if (hurt && hurt > nowMs) X += Math.round(Math.sin(t * 70));
+      const X = Math.round(p[0] * u), Y = Math.round(p[1] * u);
+      SP.drawShadow(ctx, X, Y, S.radius(o) * u * 0.95);
       drawCreature(o, p, X, Y, t, dt, u);
       continue;
     }
     const X = Math.round(o.x * u), Y = Math.round(o.y * u);
     if (kind === 0 || kind === 1) {
-      const cv = kind === 0 ? SP.tree(o, season, u) : SP.rock(o, season, u);
+      const cv = kind === 0 ? SP.tree(o, season, u) : SP.rock(o, season, u, SP.rockTint(o));
       if (!app.low && L === 0 && occluded(o)) { ctx.globalAlpha = 0.45; SP.stamp(ctx, cv, X, Y); ctx.globalAlpha = 1; }
       else SP.stamp(ctx, cv, X, Y);
-    } else if (kind === 2) SP.drawBush(ctx, o, X, Y, season, u, (app.shake.get(o.x * 7 + o.y) || 0) > nowMs);
+    } else if (kind === 2) SP.drawBush(ctx, o, X, Y, season, u, (app.shake.get(o.x * 7 + o.y) || 0) > nowMs, SP.bushKind(o));
     else if (kind === 3) {
       SP.stamp(ctx, SP.mushroom(u), X, Y);
       if (night > 0.2 && !app.low) glow(X, Y - Math.round(9 * u), Math.max(2, Math.round(10 * u)), [190, 140, 255], 0.35 * night);
@@ -522,7 +450,7 @@ function render(t, dt) {
       ctx.globalAlpha = Math.max(0, Math.min(1, (o.t + 2400 - w.tick) / 400));
       SP.stamp(ctx, SP.grave(o, u), X, Y);
       ctx.globalAlpha = 1;
-    } else if (kind === 7) SP.stamp(ctx, SP.shrub(season, u), X, Y);
+    } else if (kind === 7) SP.stamp(ctx, SP.shrub(season, u, SP.shrubKind(o)), X, Y);
   }
 
   if (L === 0) for (const [c, p] of drawn) drawEmote(c, p, t, u);
@@ -535,7 +463,7 @@ function render(t, dt) {
 
   // light: weather + time of day (the viewer's own clock)
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const weather = S.weatherAt(w.tick);
+  const weather = localWeather(S.weatherAt(w.tick), season);
   drawSky(sun, weather, bw, bh);
   drawWeather(t, dt, weather, bw, bh);
   ctx.setTransform(1, 0, 0, 1, -ox, -oy);
@@ -738,10 +666,22 @@ function drawWaterSparkles(t, view, u, season) {
   }
 }
 
+// The shared weather, as it falls where the camera is: deserts stay dry,
+// the tropics get rain instead of snow, the far north gets snow instead of rain.
+function localWeather(weather, season) {
+  if (weather !== 'rain' && weather !== 'snow') return weather;
+  const b = S.biomeAt(Math.max(0, Math.min(S.WORLD_W, app.cam.x)), Math.max(0, Math.min(S.WORLD_H, app.cam.y)));
+  const B = S.BIOME;
+  if (b === B.DESERT) return 'cloudy';
+  if (S.isHot(b)) return 'rain';
+  if (S.isCold(b) && season !== 1) return 'snow';
+  return weather;
+}
+
 function drawCloudShadows(t, view, u, w) {
   const weather = S.weatherAt(w.tick);
-  const n = weather === 'clear' ? 4 : 9;
-  ctx.fillStyle = 'rgba(30,40,80,0.10)';
+  const n = Math.round((weather === 'clear' ? 4 : 9) * S.WORLD_W * S.WORLD_H / (7200 * 4800) * 0.6);
+  ctx.fillStyle = 'rgba(30,40,80,0.08)';
   for (let i = 0; i < n; i++) {
     const sp = 10 + S.hash01(i, 1, 5) * 8;
     const span = S.WORLD_W + 1600;
@@ -860,37 +800,18 @@ function creatureAt(sx, sy) {
   return best;
 }
 
-// Gestures:
-//   drag empty ground: look around      pinch / wheel: zoom
-//   tap a creature: show who it is      double tap a creature: poke it
-//   press and hold a creature, then drag: pick it up and put it somewhere else
+// Gestures (looking only: nothing a visitor does changes the world):
+//   drag: look around      pinch / wheel: zoom      tap a creature: see who it is
 const pointers = new Map();
 let drag = null;
-let lastTap = { t: 0, id: -1, x: 0, y: 0 };
-const HOLD_MS = 380;
 
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   touched();
   if (pointers.size === 1) {
-    const c = creatureAt(e.clientX, e.clientY);
-    drag = { x: e.clientX, y: e.clientY, cx: app.cam.x, cy: app.cam.y, t: performance.now(), moved: 0, id: c ? c.id : -1 };
-    if (c) {
-      drag.timer = setTimeout(() => {
-        // still holding the same creature without having moved: pick it up
-        if (!drag || drag.moved > 10 || drag.pinch) return;
-        const cc = byId(drag.id);
-        if (!cc) return;
-        const [wx, wy] = screenToWorld(drag.x, drag.y);
-        app.held = { id: cc.id, x: wx, y: wy };
-        canvas.classList.add('holding');
-        if (navigator.vibrate) navigator.vibrate(15);
-      }, HOLD_MS);
-    }
+    drag = { x: e.clientX, y: e.clientY, cx: app.cam.x, cy: app.cam.y, t: performance.now(), moved: 0 };
   } else if (pointers.size === 2) {
-    if (drag) clearTimeout(drag.timer);
-    app.held = null;
     const [p1, p2] = [...pointers.values()];
     drag = { pinch: true, d: Math.hypot(p1.x - p2.x, p1.y - p2.y), z: app.cam.z, moved: 99 };
   }
@@ -917,13 +838,7 @@ canvas.addEventListener('pointermove', e => {
   if (drag.pinch) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy));
-  if (app.held) {
-    const [wx, wy] = screenToWorld(e.clientX, e.clientY);
-    app.held.x = wx; app.held.y = wy;
-    return;
-  }
   if (drag.moved > 8) {
-    clearTimeout(drag.timer);
     canvas.classList.add('dragging');
     app.cam.x = drag.cx - dx / app.cam.z; app.cam.y = drag.cy - dy / app.cam.z;
     app.camTarget = null;
@@ -935,21 +850,8 @@ canvas.addEventListener('pointermove', e => {
 function endPointer(e) {
   if (!pointers.has(e.pointerId)) return;
   pointers.delete(e.pointerId);
-  canvas.classList.remove('dragging', 'holding');
-  if (drag) clearTimeout(drag.timer);
-  if (app.held && e.type === 'pointerup') {
-    // put it down: everyone sees it land a few seconds later
-    const h = app.held;
-    app.held = null;
-    if (!S.walkable(h.x, h.y)) UI.toast('It can only go on solid ground.');
-    else {
-      app.moves.set(h.id, { x: h.x, y: h.y, until: performance.now() + (S.EDIT_DELAY / S.TPS + 3) * 1000 });
-      edit({ k: 'move', c: h.id, x: h.x, y: h.y }).then(ok => { if (!ok) app.moves.delete(h.id); });
-    }
-  } else if (drag && !drag.pinch && drag.moved <= 8 && performance.now() - drag.t < 500 && e.type === 'pointerup') {
-    tap(e.clientX, e.clientY);
-  }
-  app.held = e.type === 'pointerup' ? null : app.held;
+  canvas.classList.remove('dragging');
+  if (drag && !drag.pinch && drag.moved <= 8 && performance.now() - drag.t < 500 && e.type === 'pointerup') tap(e.clientX, e.clientY);
   if (pointers.size === 1) {
     const [p] = [...pointers.values()];
     drag = { x: p.x, y: p.y, cx: app.cam.x, cy: app.cam.y, t: 0, moved: 99 };
@@ -958,14 +860,6 @@ function endPointer(e) {
 
 function tap(sx, sy) {
   const c = creatureAt(sx, sy);
-  const now = performance.now();
-  const double = c && lastTap.id === c.id && now - lastTap.t < 350 && Math.abs(sx - lastTap.x) + Math.abs(sy - lastTap.y) < 40;
-  lastTap = { t: now, id: c ? c.id : -1, x: sx, y: sy };
-  if (double) {
-    lastTap.t = 0;
-    edit({ k: 'poke', c: c.id }).then(ok => { if (ok) addParticle({ kind: 'text', text: '!', follow: c.id, dy: -30, life: 0.5, size: 16, color: '#ffffff' }); });
-    return;
-  }
   if (c) select(c.id);
   else deselect();
 }
@@ -1048,8 +942,8 @@ const director = {
       return v;
     };
     let best = null, bv = -1e9;
-    for (const c of list) { const v = score(c); if (v > bv) { bv = v; best = c; } }
-    this.id = best.id;
+    for (const c of list) { const v = score(c) + (c.il !== this.il ? 0.5 : 0); if (v > bv) { bv = v; best = c; } }
+    this.id = best.id; this.il = best.il;
     this.until = performance.now() + 25000 + Math.random() * 20000;
     if (first) { app.cam.x = best.x; app.cam.y = best.y; clampCam(); }
   },
@@ -1061,10 +955,12 @@ const director = {
     this.lostAt = 0;
     if (now > this.until && c.st !== S.ST.HUNT && c.st !== S.ST.FLEE) { this.next(); return; }
     const p = renderPos(c, alphaNow());
-    const ease = 1 - Math.pow(0.3, dt);
+    // a long way off (another island): rise up, glide over the sea, come back down
+    const far = Math.hypot(p[0] - app.cam.x, p[1] - app.cam.y) > 1600;
+    const ease = 1 - Math.pow(far ? 0.6 : 0.3, dt);
     app.cam.x += (p[0] - app.cam.x) * ease;
     app.cam.y += (p[1] - 20 - app.cam.y) * ease;
-    const zWant = defaultZoom();
+    const zWant = far ? Math.max(minZoom(), defaultZoom() * 0.2) : defaultZoom();
     if (Math.abs(zWant - app.cam.z) > 0.002) { app.cam.z += (zWant - app.cam.z) * (1 - Math.pow(0.5, dt)); app.zoomedAt = performance.now(); }
     clampCam();
   },

@@ -38,7 +38,7 @@ canvas#world {
   image-rendering: pixelated;
   display: block; cursor: grab;
 }
-canvas#world.dragging, canvas#world.holding { cursor: grabbing; }
+canvas#world.dragging { cursor: grabbing; }
 canvas#world.pointing { cursor: pointer; }
 
 :focus-visible { outline: var(--px) solid #1f6fe0; outline-offset: var(--px); }
@@ -102,13 +102,6 @@ canvas#world.pointing { cursor: pointer; }
 .loader p { margin: 0; font-weight: 700; font-size: 1.3rem; text-align: center; padding: 0 20px; color: var(--paper); text-shadow: var(--px) var(--px) 0 var(--ink); }
 .progress { width: min(280px, 70vw); height: 18px; padding: var(--px); }
 .progress i { display: block; height: 100%; width: 0; background: var(--dumpling); }
-
-.toast {
-  position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); transform: translateX(-50%);
-  background: var(--ink); color: var(--paper); padding: 6px 14px; font-weight: 700;
-  z-index: 20; max-width: calc(100vw - 32px); text-align: center;
-  box-shadow: 0 var(--px) 0 0 rgba(24, 20, 30, 0.35);
-}
 
 @media (prefers-reduced-motion: reduce) {
   .loader { transition: none; }

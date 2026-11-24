@@ -4,19 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Wigglewood</title>
-<meta name="description" content="A tiny shared island of dumplings and grumbles that keeps living on its own. Everyone sees the same world.">
+<meta name="description" content="A world of little islands where dumplings and grumbles live and evolve on their own. Everyone sees the same world.">
 <meta name="theme-color" content="#4e9fe2">
 <meta property="og:title" content="Wigglewood">
-<meta property="og:description" content="A tiny shared island of dumplings and grumbles that keeps living on its own. Everyone sees the same world.">
+<meta property="og:description" content="A world of little islands where dumplings and grumbles live and evolve on their own. Everyone sees the same world.">
 <meta property="og:image" content="https://fordpepper.github.io/wigglewood/og.jpg">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preload" href="fonts/pixelify-sans-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/pixelify-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<canvas id="world" aria-label="The island of Wigglewood. Drag to look around, pinch or scroll to zoom. Tap a creature to meet it, double tap to poke it, press and hold to pick it up and move it."></canvas>
+<canvas id="world" aria-label="The islands of Wigglewood. Drag to look around, pinch or scroll to zoom, tap a creature to meet it."></canvas>
 
 <div class="clock pixel-box" id="clock">--:--</div>
 
@@ -35,8 +36,6 @@
   <p id="loader-text">Waking up Wigglewood…</p>
   <div class="progress pixel-box"><i id="loader-bar"></i></div>
 </div>
-
-<div id="toast" class="toast" hidden></div>
 
 <script type="module" src="js/main.js"></script>
 </body>

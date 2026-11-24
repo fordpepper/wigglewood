@@ -1,20 +1,27 @@
 # Wigglewood
 
-**[Open the island](https://fordpepper.github.io/wigglewood/)**
+**[Open the islands](https://fordpepper.github.io/wigglewood/)**
 
-![Dumplings and grumbles on the island](site/og.jpg)
+![Dumplings and grumbles on the islands](site/og.jpg)
 
-A pixel art island ecosystem that never stops. Dumplings eat berries, grumbles eat
+A pixel art world of islands that never stops. Dumplings eat berries, grumbles eat
 dumplings, and both have babies that inherit their parents' genes (size, speed,
-sight, colour, hats) with small mutations, so the island slowly evolves.
+sight, colour, hats) with small mutations, so the creatures slowly evolve.
 
-The island is big (7200 by 4800 world units) but life gathers in a few berry
-groves: dumpling herds live there, grumbles roam from grove to grove, and the
-forests, highlands and beaches in between stay quiet.
+The world is big (19200 by 12800 world units) and mostly sea. Seven islands and a
+scattering of islets sit in it, cold in the north and hot in the south, with
+nine biomes between them: tundra, taiga, meadow, forest, steppe, swamp, savanna,
+jungle and desert, each with its own ground, trees, berry bushes and seasons.
+Creatures can't swim, so every island's population evolves on its own: each
+island's founders have their own colours, and big bodies are cheaper to keep
+warm in the cold and costlier in the heat, so over many generations the polar
+islands breed bigger creatures and the tropical ones smaller. Life gathers in a
+few berry groves per island; the land in between stays quiet.
 
-**Everyone sees the same world.** The state of the island is a pure function of
+**Everyone sees the same world.** The state of the world is a pure function of
 the current time: open it on two devices at once and the same creatures are in
-the same places. No accounts, no server, just GitHub.
+the same places. No accounts, no server, just GitHub. Nobody can change it:
+you can look around and tap a creature to see who it is, that's all.
 
 ## How it works
 
@@ -32,29 +39,27 @@ the same places. No accounts, no server, just GitHub.
   raw.githubusercontent.com), simulates the remaining minutes itself, and then
   keeps running in real time. State is round-tripped through JSON at every
   checkpoint, so a browser that started from an older checkpoint follows exactly
-  the same path as the Action. Browsers compare checksums with GitHub's checkpoints
-  to catch any drift.
+  the same path as the Action.
+- **After loading, the page never touches the network again.** Fonts and the
+  checkpoint are fetched while the loader shows; from then on everything runs on
+  your device. If the tab sleeps for a while, it simulates the missed time
+  locally when you come back.
 - Pushing to `main` publishes the page to GitHub Pages (`world.yml`).
-- **Visitors can meddle**: tap a creature to see who it is, double tap to poke it
-  (enough pokes and it's gone), press and hold to pick it up and drop it somewhere
-  else. Edits are posted to a public [ntfy.sh](https://ntfy.sh) topic, so nobody
-  needs an account. Each edit names the tick it takes effect on, three seconds
-  ahead, and whether it counts is decided only from the edit and ntfy's
-  timestamp, so every browser and the heartbeat apply exactly the same edits at
-  the same moment. A browser that hears about an edit late rewinds a few seconds
-  and replays. The island accepts at most 40 edits a minute in total.
 - When nobody touches anything for a while the camera drifts from one
-  interesting creature to the next, so it works as something to just watch.
+  interesting creature to the next, rising up and gliding over the sea when the
+  next one lives on another island, so it works as something to just watch.
 - No cookies and no local storage: nothing is saved in your browser.
 - Everything is pixel art drawn procedurally (`site/js/pixel.js`, `sprites.js`,
   `terrain.js`): the world is painted into a small buffer, one pixel per art
   pixel, and scaled up with hard edges. Zoom settles on whole-pixel sizes; far
-  out, trees are baked into the ground tiles so the whole island is cheap to show.
+  out, trees are baked into the ground tiles so the whole world is cheap to show.
 - Slow devices drop to 30 fps and fewer effects automatically.
   `?quality=low` or `?quality=high` forces one.
 - Day and night follow the viewer's own clock (that part is only drawn, not
   simulated, so the shared world is the same in every timezone). Seasons belong
-  to the island: each one lasts three real hours.
+  to the world: each one lasts three real hours. Weather is shared too, but falls
+  differently by climate: no rain in the desert, rain instead of snow in the
+  tropics, snow in the far north.
 
 ## Running locally
 
@@ -67,7 +72,7 @@ Other tools:
 
 ```sh
 node scripts/test-determinism.mjs          # continuous vs. reloaded runs must match
-node scripts/balance.mjs 48                # simulate 48 hours headless, print populations
+node scripts/balance.mjs 48                # simulate 48 hours headless, print populations per island
 ```
 
 `?season=0..3&hour=0..24` in the URL previews a season or time of day (drawing

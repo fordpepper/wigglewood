@@ -294,7 +294,9 @@ export function tree(tr, season, u) {
     const s = (0.72 + kq * 0.36) * u;
     const W = Math.ceil(54 * s) * 2 + 4, H = Math.ceil(100 * s) + 6;
     const p = new Pix(W, H, W / 2, H - 3);
-    if (tr.kind === 1) {
+    if (tr.kind >= 2) {
+      exoticTree(p, tr.kind, kq, season, s);
+    } else if (tr.kind === 1) {
       p.rect(Math.round(-3.5 * s), Math.round(-14 * s), Math.max(1, Math.round(7 * s)), Math.round(14 * s) + 1, BARK);
       const greens = season === 3 ? [hex('#3f7f5a'), hex('#2d6446'), hex('#5e9c78')] : season === 2 ? [hex('#3c8a52'), hex('#2a6a3d'), hex('#5aa86c')] : [hex('#3d9a5a'), hex('#2b7a44'), hex('#5dbb76')];
       for (let i = 0; i < 3; i++) {
@@ -325,52 +327,147 @@ export function tree(tr, season, u) {
   });
 }
 
+// the jungle, the tropics, the savanna, the desert and the bogs each get their own trees
+function exoticTree(p, kind, kq, season, s) {
+  const r = (x, y, w, h, c) => p.rect(Math.round(x * s), Math.round(y * s), Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)), c);
+  if (kind === 2) { // jungle giant: thick trunk, broad dark canopy, hanging vines
+    p.poly([[-7 * s, 1], [-5 * s, -34 * s], [5 * s, -34 * s], [7 * s, 1]], BARK);
+    p.rim(1, 0, BARK_D, BARK);
+    const c1 = hex('#2f8f3e'), c2 = hex('#1f6a2e'), c3 = hex('#56b456');
+    for (const [x, y, rx, ry] of [[0, -52, 30, 18], [-20, -44, 16, 12], [20, -45, 17, 12], [-8, -64, 17, 12], [11, -62, 16, 11]]) p.ellipse(x * s, y * s, rx * s, ry * s, c1);
+    shaded(p, c1, c2, c3);
+    const vine = hex('#226b2b');
+    for (const x of [-22, -9, 6, 21]) for (let y = -40; y < -26 + (x & 3) * 3; y++) if (p.solid(Math.round(x * s), Math.round((y - 4) * s))) p.set(Math.round(x * s), Math.round(y * s), vine);
+  } else if (kind === 3) { // palm: a leaning ringed trunk and drooping fronds
+    const lean = kq > 0.5 ? 1 : -1;
+    for (let i = 0; i < 12; i++) {
+      const y = -i * 4.6, x = lean * (i * i) * 0.09;
+      r(x - 2.5, y - 5, 5, 5, i % 2 ? BARK : hex('#a87850'));
+    }
+    const tx = lean * 13, ty = -55;
+    const c1 = hex('#3f9e45'), c2 = hex('#2c7a35'), c3 = hex('#69c25c');
+    for (const [dx, dy] of [[-26, 10], [26, 10], [-18, -10], [18, -11], [-30, 0], [30, -1], [0, -14]]) {
+      p.poly([[tx * s, (ty - 3) * s], [(tx + dx) * s, (ty + dy) * s], [(tx + dx * 0.55) * s, (ty + dy * 0.4 + 5) * s], [tx * s, (ty + 3) * s]], c1);
+    }
+    shaded(p, c1, c2, c3);
+    if (s >= 0.3) for (const dx of [-2, 2]) p.ellipse((tx + dx) * s, (ty + 4) * s, 2.2 * s, 2.2 * s, hex('#7a4b2a'));
+  } else if (kind === 4) { // acacia: forked trunk under a flat umbrella
+    p.poly([[-3 * s, 1], [-2 * s, -20 * s], [2 * s, -20 * s], [3 * s, 1]], BARK);
+    p.poly([[-2 * s, -18 * s], [-14 * s, -34 * s], [-11 * s, -35 * s], [0, -20 * s]], BARK);
+    p.poly([[1 * s, -18 * s], [13 * s, -33 * s], [16 * s, -32 * s], [3 * s, -16 * s]], BARK);
+    const c1 = season === 1 ? hex('#8fa13e') : season === 3 ? hex('#7f9a4a') : hex('#6f9a3c');
+    for (const [x, y, rx, ry] of [[0, -38, 32, 7], [-14, -42, 15, 5], [13, -42, 15, 5]]) p.ellipse(x * s, y * s, rx * s, ry * s, c1);
+    shaded(p, c1, shade(c1, 0.72), shade(c1, 1.3));
+  } else if (kind === 5) { // cactus: a column with two arms
+    const c1 = hex('#4f9a52'), c2 = hex('#357a3d'), c3 = hex('#7cc276');
+    p.fill(-6 * s, -42 * s, 6 * s, 0, (x, y) => Math.abs(x) <= 5.5 * s && (y > -36 * s || (x * x + (y + 36 * s) * (y + 36 * s)) <= 30 * s * s), c1);
+    const arm = (sd, y0, h) => {
+      p.rect(Math.round(sd > 0 ? 5 * s : -13 * s), Math.round(y0 * s), Math.max(1, Math.round(8 * s)), Math.max(1, Math.round(4 * s)), c1);
+      p.fill((sd > 0 ? 9 : -13) * s, (y0 - h) * s, (sd > 0 ? 13 : -9) * s, (y0 + 3) * s, (x, y) => (y > (y0 - h + 3) * s || Math.abs(x - sd * 11 * s) * Math.abs(x - sd * 11 * s) + (y - (y0 - h + 3) * s) * (y - (y0 - h + 3) * s) <= 5 * s * s), c1);
+    };
+    arm(1, -22, 12 + kq * 6); if (kq > 0.3) arm(-1, -16, 10);
+    shaded(p, c1, c2, c3);
+    if (s >= 0.3) p.paint((x, y) => (x & 1) === 0 && (y & 3) === 1, c2, c1);
+    if (season === 0 && s >= 0.3) { p.set(0, Math.round(-42 * s), hex('#ff7bd0')); p.set(1, Math.round(-42 * s), hex('#ffd23f')); }
+  } else { // willow: a bent dark trunk and long hanging strands
+    p.poly([[-5 * s, 1], [-3 * s, -24 * s], [4 * s, -24 * s], [5 * s, 1]], hex('#6a5040'));
+    const c1 = season === 2 ? hex('#a59440') : season === 3 ? hex('#8e9c86') : hex('#6f9a4a');
+    p.ellipse(0, -40 * s, 24 * s, 15 * s, c1);
+    for (let x = -22; x <= 22; x += 4) {
+      const len = 14 + ((x * 7 + 40) % 9);
+      p.rect(Math.round(x * s), Math.round(-38 * s), Math.max(1, Math.round(2.4 * s)), Math.round(len * s), c1);
+    }
+    shaded(p, c1, shade(c1, 0.72), shade(c1, 1.25));
+  }
+}
+
 const ROCK = hex('#a9a7a2'), ROCK_D = hex('#7f7d79'), ROCK_L = hex('#cfcdc7');
-export function rock(rk, season, u) {
+const RED = hex('#c27f62'), RED_D = hex('#9a5c45'), RED_L = hex('#dea084');
+// rocks in the desert and savanna are red sandstone
+export function rockTint(o) {
+  if (o._t === undefined) { const b = S.biomeAt(o.x, o.y); o._t = b === S.BIOME.DESERT || b === S.BIOME.SAVANNA ? 1 : 0; }
+  return o._t;
+}
+export function rock(rk, season, u, tint = 0) {
   const kq = Math.round(rk.k * 4) / 4;
-  return sprites.get(`rock|${rk.big}|${kq}|${season === 3}|${u}`, () => {
+  return sprites.get(`rock|${rk.big}|${kq}|${season === 3}|${u}|${tint}`, () => {
     const s = (rk.big ? 1.1 + kq * 0.6 : 0.6 + kq * 0.4) * u;
     const W = Math.ceil(20 * s) * 2 + 4, H = Math.ceil(24 * s) + 5;
     const p = new Pix(W, H, W / 2, H - 2);
-    p.fill(-16 * s, -22 * s, 16 * s, 0, (x, y) => y <= 0.5 && ((x + s) / (15 * s)) ** 2 + ((y + 8 * s) / (12 * s)) ** 2 <= 1 || ((x - 4 * s) / (8 * s)) ** 2 + ((y + 15 * s) / (7 * s)) ** 2 <= 1, ROCK);
-    shaded(p, ROCK, ROCK_D, ROCK_L);
-    if (season === 3) p.paint((x, y) => !p.solid(x, y - 2) || !p.solid(x, y - 1), WHITE);
+    const [c1, c2, c3] = tint ? [RED, RED_D, RED_L] : [ROCK, ROCK_D, ROCK_L];
+    p.fill(-16 * s, -22 * s, 16 * s, 0, (x, y) => y <= 0.5 && ((x + s) / (15 * s)) ** 2 + ((y + 8 * s) / (12 * s)) ** 2 <= 1 || ((x - 4 * s) / (8 * s)) ** 2 + ((y + 15 * s) / (7 * s)) ** 2 <= 1, c1);
+    shaded(p, c1, c2, c3);
+    if (season === 3 && !tint) p.paint((x, y) => !p.solid(x, y - 2) || !p.solid(x, y - 1), WHITE);
     p.outline();
     return p.canvas();
   });
 }
 
+// berry bushes look different on every kind of land:
+// 0 leafy, 1 prickly pear (desert), 2 jungle fruit, 3 low lingonberry (cold), 4 savanna, 5 bog blueberry
+export function bushKind(b) {
+  if (b._k === undefined) {
+    const bi = S.biomeAt(b.x, b.y), B = S.BIOME;
+    b._k = bi === B.DESERT ? 1 : bi === B.JUNGLE ? 2 : bi === B.TAIGA || bi === B.TUNDRA ? 3 : bi === B.SAVANNA ? 4 : bi === B.SWAMP ? 5 : 0;
+  }
+  return b._k;
+}
 const BUSH = [hex('#4fb24c'), hex('#47a446'), hex('#8a9a3c'), hex('#6b8a6a')];
-export function bush(season, u) {
-  return sprites.get(`bush|${season}|${u}`, () => {
+const BERRIES = [BERRY, hex('#ff5fa0'), hex('#ff9a2a'), hex('#e02c3c'), hex('#e8344e'), hex('#5b5ee8')];
+export function bush(season, u, kind = 0) {
+  return sprites.get(`bush|${season}|${u}|${kind}`, () => {
     const s = u;
-    const W = Math.ceil(24 * s) * 2 + 4, H = Math.ceil(30 * s) + 5;
+    const W = Math.ceil(26 * s) * 2 + 4, H = Math.ceil(32 * s) + 5;
     const p = new Pix(W, H, W / 2, H - 2);
-    const c1 = BUSH[season];
-    for (const [x, y, r] of [[-9, -10, 10], [9, -10, 10], [0, -17, 11]]) p.ellipse(x * s, y * s, r * s, r * s * 0.92, c1);
-    shaded(p, c1, shade(c1, 0.75), shade(c1, 1.25));
-    if (season === 3) p.paint((x, y) => !p.solid(x, y - 1), WHITE);
+    if (kind === 1) {
+      const c1 = hex('#5fa85a');
+      for (const [x, y, rx, ry] of [[0, -9, 9, 10], [-10, -18, 7, 8], [9, -20, 7, 8], [-1, -26, 6, 7]]) p.ellipse(x * s, y * s, Math.max(1.6, rx * s), Math.max(1.8, ry * s), c1);
+      shaded(p, c1, shade(c1, 0.72), shade(c1, 1.3));
+      if (s >= 0.3) p.paint((x, y) => ((x * 3 + y * 5) & 7) === 0, hex('#f6f0c8'), c1);
+    } else {
+      const c1 = kind === 2 ? hex('#2f8a3a') : kind === 3 ? (season === 3 ? hex('#5f7f62') : hex('#4f8a50')) : kind === 4 ? (season === 1 ? hex('#9aa244') : hex('#78a046')) : kind === 5 ? hex('#4a7a4a') : BUSH[season];
+      const blobs = kind === 3 ? [[-11, -6, 10, 6], [10, -6, 10, 6], [0, -10, 11, 7]]
+        : kind === 2 ? [[-11, -10, 11, 9], [11, -10, 11, 9], [0, -18, 12, 10], [-4, -24, 7, 6]]
+          : [[-9, -10, 10, 9.2], [9, -10, 10, 9.2], [0, -17, 11, 10.1]];
+      for (const [x, y, rx, ry] of blobs) p.ellipse(x * s, y * s, rx * s, ry * s, c1);
+      shaded(p, c1, shade(c1, 0.75), shade(c1, 1.25));
+      if (season === 3 && kind !== 2) p.paint((x, y) => !p.solid(x, y - 1), WHITE);
+    }
     p.outline();
     return p.canvas();
   });
 }
 const BERRY_SPOTS = [[-9, -12], [7, -8], [1, -20], [-3, -6], [11, -16], [-12, -18]];
-export function drawBush(ctx, b, X, Y, season, u, shake) {
-  stamp(ctx, bush(season, u), X + (shake ? 1 : 0), Y);
+const BERRY_SPOTS_LOW = [[-12, -7], [6, -5], [0, -12], [-4, -4], [12, -8], [-8, -10]];
+const BERRY_SPOTS_CACTUS = [[-9, -23], [8, -25], [-1, -30], [5, -15], [-6, -15], [12, -19]];
+export function drawBush(ctx, b, X, Y, season, u, shake, kind = 0) {
+  stamp(ctx, bush(season, u, kind), X + (shake ? 1 : 0), Y);
   if (u < 0.2) return;
-  const c = season === 2 ? css(PLUM) : css(BERRY);
-  for (let i = 0; i < b.b && i < BERRY_SPOTS.length; i++) {
-    const x = Math.round(X + BERRY_SPOTS[i][0] * u) + (shake ? 1 : 0), y = Math.round(Y + BERRY_SPOTS[i][1] * u);
+  const c = kind === 0 && season === 2 ? css(PLUM) : css(BERRIES[kind]);
+  const spots = kind === 3 ? BERRY_SPOTS_LOW : kind === 1 ? BERRY_SPOTS_CACTUS : BERRY_SPOTS;
+  for (let i = 0; i < b.b && i < spots.length; i++) {
+    const x = Math.round(X + spots[i][0] * u) + (shake ? 1 : 0), y = Math.round(Y + spots[i][1] * u);
     ctx.fillStyle = INK_C; ctx.fillRect(x - 1, y - 1, 3, 3);
     ctx.fillStyle = c; ctx.fillRect(x, y, 2, 2);
     ctx.fillStyle = '#ffd0d8'; ctx.fillRect(x, y, 1, 1);
   }
 }
 
-export function shrub(season, u) {
-  return sprites.get(`shrub|${season}|${u}`, () => {
+// shrubs: green-gold tussocks on the steppe, bare tumbleweed twigs in the desert
+export function shrubKind(o) {
+  if (o._k === undefined) { const b = S.biomeAt(o.x, o.y); o._k = b === S.BIOME.DESERT ? 1 : 0; }
+  return o._k;
+}
+export function shrub(season, u, kind = 0) {
+  return sprites.get(`shrub|${season}|${u}|${kind}`, () => {
     const s = u, W = Math.ceil(16 * s) * 2 + 4, H = Math.ceil(18 * s) + 5;
     const p = new Pix(W, H, W / 2, H - 2);
+    if (kind === 1) {
+      const c = hex('#9a7048');
+      for (const [x0, y0, x1, y1] of [[0, 0, -9, -12], [0, 0, 8, -13], [0, 0, 0, -15], [-4, -6, -12, -8], [4, -7, 12, -9]]) p.line(x0 * s, y0 * s, x1 * s, y1 * s, c);
+      if (s >= 0.3) p.outline();
+      return p.canvas();
+    }
     const c1 = season === 3 ? hex('#c9c2b0') : hex('#a39654');
     for (const [x, y, r] of [[-6, -6, 7], [6, -6, 7], [0, -11, 7]]) p.ellipse(x * s, y * s, r * s, r * s * 0.85, c1);
     shaded(p, c1, shade(c1, 0.75), shade(c1, 1.2));

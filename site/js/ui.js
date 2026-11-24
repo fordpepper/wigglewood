@@ -1,8 +1,7 @@
-// The little bit of HTML on top of the island: the clock, the creature card,
-// the loader and the odd toast. Kept deliberately small.
+// The little bit of HTML on top of the islands: the clock, the creature card
+// and the loader. Kept deliberately small.
 import * as S from '../sim/core.js';
 import * as SP from './sprites.js';
-import { PX } from './pixel.js';
 
 const $ = id => document.getElementById(id);
 let app = null, act = null;
@@ -63,7 +62,7 @@ export function onSelectedDied(a, f) {
   const g = a.w.graves.find(g => g.t === a.w.tick && g.n === $('c-name').textContent);
   const cause = g ? g.cause : f.cause;
   $('c-status').textContent = cause === 'eaten' ? `Was eaten${g && g.by ? ` by ${g.by}` : ''}.`
-    : cause === 'starved' ? 'Ran out of food.' : cause === 'poked' ? 'Was poked one too many times.' : 'Passed away of old age.';
+    : cause === 'starved' ? 'Ran out of food.' : 'Passed away of old age.';
   $('c-energy').style.width = '0%';
 }
 
@@ -73,7 +72,7 @@ function updateCard() {
   const sp = S.SPECIES[c.s];
   const mins = Math.floor(c.age / S.TPS / 60);
   $('c-name').textContent = c.n;
-  $('c-kind').textContent = `${sp.name}, generation ${c.gen}, ${mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`} old`;
+  $('c-kind').textContent = `${sp.name} from ${S.islandName(c.il)}, generation ${c.gen}, ${mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${mins % 60} min`} old`;
   $('c-status').textContent = statusText(c);
   const em = S.maxEnergy(c);
   const e = $('c-energy');
@@ -98,7 +97,7 @@ function portraitLoop() {
     const c = app.w.creatures.find(c => c.id === app.selected);
     if (!c) return;
     const t = performance.now() / 1000;
-    const u = Math.min(1 / PX, 8.5 / S.radius(c));
+    const u = Math.min(0.6, 9 / S.radius(c));
     const o = { t, frame: Math.floor(t * 1.1) & 1, facing: 1, lookX: Math.sin(t * 0.5) > 0 ? 0.8 : -0.4, lookY: 0.2, mood: 'open', mouth: 'smile', blink: (t % 4.2) < 0.15 };
     if (c.s === 0) {
       if (c.st === S.ST.SLEEP) o.mood = 'closed';
@@ -117,15 +116,7 @@ function portraitLoop() {
 }
 
 // ---------------------------------------------------------------------------
-// toast + loader
-
-let toastTimer = 0;
-export function toast(msg, ms = 2800) {
-  const t = $('toast');
-  t.textContent = msg; t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, ms);
-}
+// loader
 
 export function loaderProgress(frac, text) {
   $('loader-bar').style.width = `${Math.round(Math.max(0, Math.min(1, frac)) * 100)}%`;
