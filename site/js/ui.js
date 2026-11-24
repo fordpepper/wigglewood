@@ -119,7 +119,7 @@ function portraitLoop() {
 // ---------------------------------------------------------------------------
 // name search (double tap anywhere, or press / on a keyboard)
 
-const MAX_RESULTS = 8;
+const MAX_RESULTS = 60;
 function initSearch() {
   const input = $('search-input');
   input.addEventListener('input', () => renderResults());
@@ -157,17 +157,13 @@ function renderResults() {
   ul.textContent = '';
   if (!q) { $('search-hint').hidden = false; return; }
   $('search-hint').hidden = true;
-  const starts = [], has = [];
-  for (const c of app.w.creatures) {
-    const n = c.n.toLowerCase();
-    if (n.startsWith(q)) starts.push(c); else if (n.includes(q)) has.push(c);
-  }
-  const byName = (a, b) => a.n.localeCompare(b.n) || a.id - b.id;
-  const list = starts.sort(byName).concat(has.sort(byName)).slice(0, MAX_RESULTS);
+  // everyone whose name starts with what was typed, in alphabetical order
+  const list = app.w.creatures.filter(c => c.n.toLowerCase().startsWith(q))
+    .sort((a, b) => a.n.localeCompare(b.n) || a.id - b.id).slice(0, MAX_RESULTS);
   if (!list.length) {
     const li = document.createElement('li');
     li.className = 'none';
-    li.textContent = 'Nobody by that name right now.';
+    li.textContent = 'Nobody\u2019s name starts with that right now.';
     ul.append(li);
     return;
   }

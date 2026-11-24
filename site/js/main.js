@@ -300,6 +300,8 @@ function zoomSteps() {
 }
 function snapZoom(z) {
   const s = z * app.dpr * PX;
+  // close up, an art pixel is big enough that uneven pixel sizes don't show: zoom freely
+  if (s >= 4 && z >= minZoom() && z <= maxZoom()) return z;
   const toZ = v => v / (app.dpr * PX);
   let best = null, bd = Infinity;
   for (const v of zoomSteps()) {
@@ -318,7 +320,7 @@ function updateCamera(dt) {
   if (k.has('ArrowRight') || k.has('d')) mx += 1;
   if (k.has('ArrowUp') || k.has('w')) my -= 1;
   if (k.has('ArrowDown') || k.has('s')) my += 1;
-  if (mx || my) { app.cam.x += mx * pan; app.cam.y += my * pan; app.following = false; app.camTarget = null; touched(); }
+  if (mx || my) { app.cam.x += mx * pan; app.cam.y += my * pan; app.following = false; app.camTarget = null; app.fling = null; touched(); }
   director.update(dt);
   if (app.following && app.selected >= 0) {
     const p = renderPos(byId(app.selected), alphaNow());
@@ -344,11 +346,22 @@ function updateCamera(dt) {
     }
     if (!app.following && Math.abs(app.camTarget.x - app.cam.x) < 1 && Math.abs(app.camTarget.y - app.cam.y) < 1) app.camTarget = null;
   }
-  // settle on a crisp zoom once nobody is zooming
+  // a flung view glides on and slows down
+  if (app.fling) {
+    app.cam.x -= app.fling.vx / app.cam.z * dt; app.cam.y -= app.fling.vy / app.cam.z * dt;
+    const k = Math.pow(0.04, dt);
+    app.fling.vx *= k; app.fling.vy *= k;
+    if (Math.hypot(app.fling.vx, app.fling.vy) < 15) app.fling = null;
+  }
+  // settle on a crisp zoom once nobody is zooming, keeping the spot that was
+  // zoomed on where it is
   if (performance.now() - app.zoomedAt > 250 && pointers.size < 2 && !(app.camTarget && app.camTarget.z)) {
     const zs = snapZoom(app.cam.z);
+    const f = !app.following && app.focus ? app.focus : [app.W / 2, app.H / 2];
+    const [wx, wy] = screenToWorld(f[0], f[1]);
     if (Math.abs(zs - app.cam.z) < 0.002) app.cam.z = zs;
-    else app.cam.z += (zs - app.cam.z) * (1 - Math.pow(0.0001, dt));
+    else app.cam.z += (zs - app.cam.z) * (1 - Math.pow(0.002, dt));
+    if (!app.following) { app.cam.x = wx - (f[0] - app.W / 2) / app.cam.z; app.cam.y = wy - (f[1] - app.H / 2) / app.cam.z; }
   }
   clampCam();
 }
@@ -381,7 +394,8 @@ function render(t, dt) {
   const { L, k, u } = viewParams();
   app.view = { L, k, u };
   // size the art buffer and place it on screen
-  const bw = Math.ceil(W * dpr / k) + 2, bh = Math.ceil(H * dpr / k) + 2;
+  // (rounded up so the buffer isn't reallocated on every frame of a zoom)
+  const bw = Math.ceil((W * dpr / k + 2) / 32) * 32, bh = Math.ceil((H * dpr / k + 2) / 32) * 32;
   if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
   const leftArt = (cam.x - W / 2 / cam.z) * u, topArt = (cam.y - H / 2 / cam.z) * u;
   const ox = Math.floor(leftArt), oy = Math.floor(topArt);
@@ -812,16 +826,25 @@ function creatureAt(sx, sy) {
 const pointers = new Map();
 let drag = null;
 
+function startPinch() {
+  const [p1, p2] = [...pointers.values()];
+  const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+  // the spot between the fingers stays under the fingers while they move apart, together or around
+  drag = { pinch: true, d: Math.max(10, Math.hypot(p1.x - p2.x, p1.y - p2.y)), z: app.cam.z, anchor: screenToWorld(mx, my), moved: 99 };
+  if (app.camTarget) app.camTarget.z = undefined;
+  app.flying = false;
+}
+function startDrag(x, y, moved) {
+  drag = { x, y, cx: app.cam.x, cy: app.cam.y, t: performance.now(), moved, samples: [[performance.now(), x, y]] };
+}
+
 canvas.addEventListener('pointerdown', e => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   touched();
-  if (pointers.size === 1) {
-    drag = { x: e.clientX, y: e.clientY, cx: app.cam.x, cy: app.cam.y, t: performance.now(), moved: 0 };
-  } else if (pointers.size === 2) {
-    const [p1, p2] = [...pointers.values()];
-    drag = { pinch: true, d: Math.hypot(p1.x - p2.x, p1.y - p2.y), z: app.cam.z, moved: 99 };
-  }
+  app.fling = null;
+  if (pointers.size === 1) startDrag(e.clientX, e.clientY, 0);
+  else if (pointers.size === 2) startPinch();
 });
 
 canvas.addEventListener('pointermove', e => {
@@ -838,13 +861,21 @@ canvas.addEventListener('pointermove', e => {
   touched();
   if (drag.pinch && pointers.size >= 2) {
     const [p1, p2] = [...pointers.values()];
-    const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-    zoomAt((p1.x + p2.x) / 2, (p1.y + p2.y) / 2, drag.z * d / drag.d / app.cam.z);
+    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+    setZoom(drag.z * Math.hypot(p1.x - p2.x, p1.y - p2.y) / drag.d);
+    if (!app.following) { // (when following someone, zoom on them instead)
+      app.cam.x = drag.anchor[0] - (mx - app.W / 2) / app.cam.z;
+      app.cam.y = drag.anchor[1] - (my - app.H / 2) / app.cam.z;
+    }
+    app.zoomedAt = performance.now(); app.focus = [mx, my];
+    clampCam();
     return;
   }
   if (drag.pinch) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.moved = Math.max(drag.moved, Math.abs(dx) + Math.abs(dy));
+  drag.samples.push([performance.now(), e.clientX, e.clientY]);
+  if (drag.samples.length > 12) drag.samples.shift();
   if (drag.moved > 8) {
     canvas.classList.add('dragging');
     app.cam.x = drag.cx - dx / app.cam.z; app.cam.y = drag.cy - dy / app.cam.z;
@@ -859,9 +890,18 @@ function endPointer(e) {
   pointers.delete(e.pointerId);
   canvas.classList.remove('dragging');
   if (drag && !drag.pinch && drag.moved <= 8 && performance.now() - drag.t < 500 && e.type === 'pointerup') tap(e.clientX, e.clientY);
+  else if (drag && !drag.pinch && drag.moved > 8 && pointers.size === 0) {
+    // let go while moving: the view glides on and slows down
+    const now = performance.now(), recent = drag.samples.filter(q => now - q[0] < 90);
+    if (recent.length >= 2) {
+      const a = recent[0], b = recent[recent.length - 1], dt = Math.max(16, b[0] - a[0]) / 1000;
+      const vx = (b[1] - a[1]) / dt, vy = (b[2] - a[2]) / dt;
+      if (Math.hypot(vx, vy) > 120 && now - b[0] < 60) app.fling = { vx: Math.max(-4000, Math.min(4000, vx)), vy: Math.max(-4000, Math.min(4000, vy)) };
+    }
+  }
   if (pointers.size === 1) {
     const [p] = [...pointers.values()];
-    drag = { x: p.x, y: p.y, cx: app.cam.x, cy: app.cam.y, t: 0, moved: 99 };
+    startDrag(p.x, p.y, 99);
   } else if (pointers.size === 0) drag = null;
 }
 
@@ -882,7 +922,7 @@ function tap(sx, sy) {
 }
 
 // no emulated mouse events after a touch: they would steal focus from the search box
-canvas.addEventListener('touchend', e => e.preventDefault(), { passive: false });
+canvas.addEventListener('touchend', e => { if (e.cancelable) e.preventDefault(); }, { passive: false });
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { app.hover = -1; });
@@ -896,6 +936,7 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 function zoomAt(sx, sy, factor) {
   app.zoomedAt = performance.now();
+  app.focus = [sx, sy];
   const [wx, wy] = screenToWorld(sx, sy);
   setZoom(app.cam.z * factor);
   if (app.camTarget) app.camTarget.z = undefined;

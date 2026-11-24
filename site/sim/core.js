@@ -556,8 +556,10 @@ export function scenery() {
 // names
 
 const SYL = [
-  ['mo', 'bi', 'pu', 'lo', 'mi', 'nu', 'po', 'bo', 'du', 'fi', 'wu', 'ti', 'pi', 'ba', 'mu', 'ni', 'bu', 'yo', 'pa', 'lu'],
-  ['grak', 'zor', 'bru', 'kra', 'gor', 'vex', 'dro', 'mok', 'thu', 'gri', 'snar', 'bok', 'zug', 'rok', 'dag', 'kru'],
+  ['mo', 'bi', 'pu', 'lo', 'mi', 'nu', 'po', 'bo', 'du', 'fi', 'wu', 'ti', 'pi', 'ba', 'mu', 'ni', 'bu', 'yo', 'pa', 'lu',
+    'e', 'a', 'o', 'u', 'i', 'ela', 'abu', 'omi', 'ipa', 'eno', 'aru', 'olu', 'ki', 'so', 'ru', 'ha', 'je', 'ze', 'qui', 'vi', 'ca', 'go', 'te'],
+  ['grak', 'zor', 'bru', 'kra', 'gor', 'vex', 'dro', 'mok', 'thu', 'gri', 'snar', 'bok', 'zug', 'rok', 'dag', 'kru',
+    'og', 'ek', 'ar', 'ug', 'eg', 'ash', 'hur', 'jag', 'lob', 'nok', 'quor', 'wre', 'yag', 'fen', 'tor', 'sk'],
 ];
 const END = [
   ['bo', 'mble', 'ppy', 'mo', 'ggle', 'nk', 'bbin', 'zzle', 'lly', 'p', 'b', 'mpkin', 'ffle', 'nny', 'bble', 'dle'],
