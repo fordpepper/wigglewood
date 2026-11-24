@@ -21,6 +21,19 @@ export function init(a, actions) {
   $('card-close').addEventListener('click', () => act.deselect());
   $('btn-follow').addEventListener('click', () => act.setFollow(!app.following));
   $('btn-share').addEventListener('click', share);
+  $('btn-feed').addEventListener('click', () => editSelected('feed'));
+  $('btn-zap').addEventListener('click', () => editSelected('zap'));
+  document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => {
+    const tool = b.dataset.tool;
+    act.setTool(app.tool === tool && tool !== 'look' ? 'look' : tool);
+    const hints = {
+      dumpling: 'Tap the island to drop in a dumpling. Everyone will see it.',
+      grumble: 'Tap the island to drop in a grumble. Everyone will see it.',
+      berries: 'Tap near a bush to fill it with berries.',
+      zap: 'Tap a creature to zap it. Everyone will see that too.',
+    };
+    if (app.tool !== 'look') toast(hints[app.tool], 3600);
+  }));
   $('btn-graph').addEventListener('click', () => togglePanel('graph-panel', 'btn-graph'));
   $('btn-help').addEventListener('click', () => togglePanel('help-panel', 'btn-help'));
   document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => closePanel(b.dataset.close)));
@@ -173,8 +186,9 @@ function updateCard() {
       if (deadInfo) { app.following = false; syncFollow(app); }
     }
     if (deadInfo) {
-      $('c-status').textContent = deadInfo.cause === 'eaten' ? `Was eaten by ${deadInfo.by}.` : deadInfo.cause === 'starved' ? 'Ran out of food.' : 'Passed away peacefully of old age.';
+      $('c-status').textContent = deadInfo.cause === 'eaten' ? `Was eaten by ${deadInfo.by}.` : deadInfo.cause === 'starved' ? 'Ran out of food.' : deadInfo.cause === 'zapped' ? 'Was zapped by a visitor.' : 'Passed away peacefully of old age.';
       $('btn-follow').disabled = true;
+      $('btn-feed').disabled = true; $('btn-zap').disabled = true;
       $('c-energy').style.width = '0%';
       const kind = $('c-kind').textContent;
       if (!kind.startsWith('The late')) $('c-kind').textContent = `The late ${kind.replace(', still a baby', '').toLowerCase()}`;
@@ -186,6 +200,7 @@ function updateCard() {
   }
   deadInfo = null;
   $('btn-follow').disabled = false;
+  $('btn-feed').disabled = false; $('btn-zap').disabled = false;
   const sp = S.SPECIES[c.s];
   $('c-name').textContent = c.n;
   $('c-kind').textContent = `${sp.name}, generation ${c.gen}${!S.isAdult(c) ? ', still a baby' : ''}`;
@@ -306,6 +321,44 @@ function share() {
 }
 
 // ---------------------------------------------------------------------------
+// tools
+
+const HUES = { dumpling: [48, 330, 200, 150, 22, 275, 0], grumble: [268, 350, 190, 15, 300, 120, 40] };
+const picked = { dumpling: null, grumble: null };
+export function pickedHue(tool) { return picked[tool] ?? undefined; }
+
+export function syncTool(a) {
+  document.querySelectorAll('.tool').forEach(b => {
+    const on = b.dataset.tool === a.tool;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  const sw = $('swatches');
+  const t = a.tool;
+  if (t !== 'dumpling' && t !== 'grumble') { sw.hidden = true; return; }
+  sw.hidden = false;
+  sw.style.top = `${$('swatches').parentElement.querySelector(`[data-tool="${t}"]`).offsetTop}px`;
+  const make = (hue) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'swatch' + (hue === null ? ' any' : '');
+    if (hue !== null) b.style.background = (t === 'dumpling' ? SP.dumplingColors : SP.grumbleColors)([1, 1, 1, hue, 0, 0, 1, 0]).body;
+    b.setAttribute('aria-label', hue === null ? 'Surprise me' : `Hue ${hue}`);
+    b.title = hue === null ? 'Surprise me' : '';
+    b.setAttribute('aria-pressed', String(picked[t] === hue));
+    b.addEventListener('click', () => { picked[t] = hue; syncTool(a); });
+    return b;
+  };
+  sw.replaceChildren(make(null), ...HUES[t].map(make));
+}
+
+function editSelected(kind) {
+  const c = app.w.creatures.find(c => c.id === app.selected);
+  if (!c) return;
+  act.edit({ k: kind, c: c.id }, c.x, c.y);
+}
+
+// ---------------------------------------------------------------------------
 // panels
 
 function togglePanel(id, btnId) {
@@ -343,6 +396,8 @@ function renderStats() {
     ['Eaten', st.eaten.toLocaleString()],
     ['Starved', st.starved.toLocaleString()],
     ['Died of old age', st.old.toLocaleString()],
+    ['Zapped by visitors', (st.zapped || 0).toLocaleString()],
+    ['Dropped in by visitors', (st.spawned || 0).toLocaleString()],
     ['Newest dumpling generation', String(st.maxGen[0])],
     ['Newest grumble generation', String(st.maxGen[1])],
     ['Oldest dumpling ever', `${Math.round(st.oldest[0] / S.TPS / 60)} min`],

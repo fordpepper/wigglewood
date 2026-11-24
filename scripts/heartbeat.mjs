@@ -60,13 +60,42 @@ function save(w) {
   g(['push', '-fq', remote, 'state']);
 }
 
+// visitor edits that take effect after `from` and up to `to`, grouped by tick
+async function editsBetween(from, to) {
+  const since = Math.floor(S.msAt(from) / 1000) - 90;
+  let text = null;
+  for (let attempt = 0; attempt < 4 && text === null; attempt++) {
+    try {
+      const res = await fetch(`${S.EDIT_URL}/json?poll=1&since=${since}`);
+      if (res.ok) text = await res.text();
+    } catch (e) { /* retry */ }
+    if (text === null) await sleep(5000 * (attempt + 1));
+  }
+  if (text === null) throw new Error('could not load visitor edits; will try again next beat');
+  const byTick = new Map();
+  let n = 0;
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    let e = null;
+    try { e = S.parseEdit(JSON.parse(line)); } catch (err) { continue; }
+    if (!e || e.t <= from || e.t > to) continue;
+    if (!byTick.has(e.t)) byTick.set(e.t, []);
+    byTick.get(e.t).push(e);
+    n++;
+  }
+  for (const list of byTick.values()) list.sort(S.compareEdits);
+  log(`${n} visitor edit(s) in this stretch`);
+  return byTick;
+}
+
 async function beat() {
   const target = Math.floor(S.tickAt(Date.now()) / S.CHECKPOINT_TICKS) * S.CHECKPOINT_TICKS;
   let w = lastCheckpoint();
   if (w && w.tick >= target) { log(`checkpoint ${w.tick} is current`); return; }
   if (!w) w = S.genesis();
+  const byTick = await editsBetween(w.tick, target);
   const from = w.tick, t0 = performance.now();
-  S.advance(w, target);
+  S.advance(w, target, 0, null, t => byTick.get(t));
   log(`advanced ${from} -> ${w.tick} in ${((performance.now() - t0) / 1000).toFixed(1)}s, ${w.creatures.length} creatures, checksum ${S.checksum(w)}`);
   save(w);
   log('pushed to the state branch');

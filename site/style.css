@@ -92,6 +92,47 @@ button { font: inherit; color: inherit; }
 .btn-round { width: 44px; padding-left: 0; padding-right: 0; border-radius: 50%; }
 .btn[aria-pressed="true"], .btn.on { background: #b8ecff; }
 
+/* ---------- tools ---------- */
+.tools {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.tool {
+  position: relative;
+  width: 56px; height: 56px; padding: 0;
+  display: grid; place-items: center;
+  background: var(--paper);
+  border: var(--line) solid var(--ink);
+  border-radius: 16px 18px 15px 19px;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.tool svg, .tool canvas { width: 32px; height: 32px; }
+.tool span {
+  position: absolute; right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+  background: var(--ink); color: var(--paper); font-weight: 700; font-size: 0.9rem;
+  padding: 2px 8px 3px; border-radius: 8px; white-space: nowrap;
+  opacity: 0; pointer-events: none; transition: opacity 120ms ease;
+}
+.tool:hover span, .tool:focus-visible span { opacity: 1; }
+.tool.on { background: var(--dumpling); transform: translate(2px, 2px); box-shadow: 1px 2px 0 var(--ink); }
+.tool[data-tool="zap"].on { background: #ffb3b3; }
+.swatches {
+  position: absolute; right: calc(100% + 12px); top: 64px;
+  display: grid; grid-template-columns: repeat(4, 30px); gap: 6px;
+  background: var(--paper); border: var(--line) solid var(--ink); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 8px;
+}
+.swatches[hidden] { display: none; }
+.swatch { width: 30px; height: 30px; border-radius: 50%; border: 2.5px solid var(--ink); cursor: pointer; padding: 0; }
+.swatch[aria-pressed="true"] { outline: 3px solid var(--ink); outline-offset: 2px; }
+.swatch.any { background: conic-gradient(#ffd23f, #ff6b8b, #8b5fd6, #4fb0ff, #5dbb55, #ffd23f); }
+canvas#world.editing { cursor: crosshair; }
+.btn-danger { background: #ffd0d0; }
+.card-edit { margin-top: 8px; }
+
 /* ---------- feed ---------- */
 .feed {
   position: fixed;
@@ -247,6 +288,12 @@ button.count:hover { transform: rotate(-1deg); }
 
 /* ---------- small screens ---------- */
 @media (max-width: 720px) {
+  .tools { top: 128px; transform: none; right: max(10px, env(safe-area-inset-right)); gap: 6px; }
+  .tool { width: 46px; height: 46px; border-radius: 14px; }
+  .tool svg, .tool canvas { width: 28px; height: 28px; }
+  .tool span { display: none; }
+  .swatches { top: 52px; right: calc(100% + 8px); }
+  .card-edit { margin-top: 6px; }
   .hud-top { flex-direction: column; align-items: stretch; gap: 8px; }
   .title-tag { align-self: flex-start; padding: 4px 12px 6px; }
   .buttons { justify-content: flex-start; }

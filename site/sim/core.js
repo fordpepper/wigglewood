@@ -501,10 +501,11 @@ function recordHistory(w, force) {
 // ---------------------------------------------------------------------------
 // the step
 
-export function step(w) {
+export function step(w, edits) {
   w.tick++;
   const tick = w.tick;
   const fx = (w.fx = []);
+  if (edits && edits.length) applyEdits(w, edits);
   const season = seasonIndex(tick);
   const list = w.creatures;
   const grid = buildGrid(list);
@@ -807,7 +808,10 @@ function crossover(w, a, b) {
 
 function killed(w, c, cause, by) {
   w.stats.deaths++;
-  if (cause === 'eaten') w.stats.eaten++; else if (cause === 'starved') w.stats.starved++; else w.stats.old++;
+  if (cause === 'eaten') w.stats.eaten++;
+  else if (cause === 'starved') w.stats.starved++;
+  else if (cause === 'zapped') w.stats.zapped = (w.stats.zapped || 0) + 1;
+  else w.stats.old++;
   w.graves.push({ x: c.x, y: c.y, n: c.n, s: c.s, h: c.g[G_HUE], t: w.tick, cause, age: c.age, by: by ? by.n : null });
   if (w.graves.length > 60) w.graves.shift();
   w.fx.push({ k: 'poof', id: c.id, x: c.x, y: c.y, s: c.s, cause });
@@ -818,7 +822,7 @@ function killed(w, c, cause, by) {
       logEvent(w, 'record', `${c.n} the ${SPECIES[c.s].name.toLowerCase()} passed away at ${Math.round(c.age / 240)} minutes, the oldest yet.`, { s: c.s });
     }
   }
-  if (c.kids >= 12 && cause !== 'old') {
+  if (c.kids >= 12 && (cause === 'eaten' || cause === 'starved')) {
     logEvent(w, 'death', `${c.n}, parent of ${c.kids}, was ${cause === 'eaten' ? `eaten by ${by.n}` : 'lost to hunger'}.`, { s: c.s });
   }
 }
@@ -847,6 +851,102 @@ function migrate(w) {
 }
 
 // ---------------------------------------------------------------------------
+// visitor edits
+//
+// Visitors can zap, feed and spawn creatures and refill bushes. Edits travel
+// through a public ntfy.sh topic (no accounts anywhere). Each edit names the
+// tick it takes effect on, a few seconds in the future, so every browser and
+// the heartbeat apply it at exactly the same moment. Whether an edit counts is
+// decided only from the edit itself and the time ntfy stamped on it, so
+// everyone agrees.
+
+export const EDIT_TOPIC = 'wigglewood-edits-v1-q8f3k2';
+export const EDIT_URL = `https://ntfy.sh/${EDIT_TOPIC}`;
+export const EDIT_DELAY = 12; // ticks between sending an edit and it happening (3 s)
+export const EDITS_PER_MINUTE = 40; // island-wide, so nobody can wipe it out in one go
+const EDIT_KINDS = ['zap', 'feed', 'spawn', 'berries'];
+
+// msg: an ntfy message ({ id, time, message }). Returns a clean edit or null.
+export function parseEdit(msg) {
+  if (!msg || msg.event !== 'message' || typeof msg.id !== 'string' || typeof msg.message !== 'string') return null;
+  if (msg.message.length > 300) return null;
+  let o;
+  try { o = JSON.parse(msg.message); } catch (e) { return null; }
+  if (!o || typeof o !== 'object' || !EDIT_KINDS.includes(o.k)) return null;
+  const t = o.t;
+  if (!Number.isInteger(t)) return null;
+  const sent = tickAt(msg.time * 1000);
+  if (t < sent - 8 || t > sent + 60) return null; // must be for "a few seconds from now"
+  const e = { id: msg.id, t, k: o.k };
+  if (o.k === 'zap' || o.k === 'feed') {
+    if (!Number.isInteger(o.c) || o.c < 1) return null;
+    e.c = o.c;
+  } else {
+    if (typeof o.x !== 'number' || typeof o.y !== 'number' || !(o.x >= 0 && o.x <= WORLD_W && o.y >= 0 && o.y <= WORLD_H)) return null;
+    e.x = Math.round(o.x * 10) / 10; e.y = Math.round(o.y * 10) / 10;
+    if (o.k === 'spawn') {
+      if (o.s !== DUMPLING && o.s !== GRUMBLE) return null;
+      e.s = o.s;
+      if (typeof o.h === 'number' && o.h >= 0 && o.h < 360) e.h = Math.round(o.h);
+    }
+  }
+  return e;
+}
+
+// deterministic order for edits that land on the same tick
+export function compareEdits(a, b) { return a.t - b.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0); }
+
+function applyEdits(w, edits) {
+  const st = w.stats;
+  const win = Math.floor(w.tick / 240);
+  if (!st.ew || st.ew[0] !== win) st.ew = [win, 0];
+  for (const e of edits) {
+    if (st.ew[1] >= EDITS_PER_MINUTE) break;
+    if (applyEdit(w, e)) st.ew[1]++;
+  }
+}
+
+function applyEdit(w, e) {
+  if (e.k === 'zap' || e.k === 'feed') {
+    const i = w.creatures.findIndex(c => c.id === e.c);
+    if (i < 0) return false;
+    const c = w.creatures[i];
+    if (e.k === 'feed') {
+      c.e = maxEnergy(c);
+      w.fx.push({ k: 'fed', id: c.id, x: c.x, y: c.y });
+      return true;
+    }
+    w.creatures.splice(i, 1);
+    killed(w, c, 'zapped');
+    logEvent(w, 'zap', `A visitor zapped ${c.n} the ${SPECIES[c.s].name.toLowerCase()}.`, { s: c.s });
+    return true;
+  }
+  if (e.k === 'berries') {
+    let best = null, bd = 90 * 90;
+    for (const b of w.bushes) {
+      const dx = b.x - e.x, dy = b.y - e.y, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = b; }
+    }
+    if (!best) return false;
+    best.b = best.m;
+    w.fx.push({ k: 'refill', x: best.x, y: best.y });
+    return true;
+  }
+  // spawn
+  if (!walkable(e.x, e.y)) return false;
+  if (countSpecies(w.creatures, e.s) >= SPECIES[e.s].cap) return false;
+  const g = founderGenes(w, e.s);
+  if (e.h !== undefined) g[G_HUE] = e.h;
+  const c = newCreature(w, e.s, e.x, e.y, g, 0, null, SPECIES[e.s].mature);
+  c.e = maxEnergy(c) * 0.8;
+  w.creatures.push(c);
+  w.stats.spawned = (w.stats.spawned || 0) + 1;
+  w.fx.push({ k: 'spawned', id: c.id, x: c.x, y: c.y });
+  logEvent(w, 'spawn', `A visitor dropped in a new ${SPECIES[e.s].name.toLowerCase()} called ${c.n}.`, { id: c.id, s: e.s });
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // serialisation
 
 const PERSIST = ['v', 'tick', 'rng', 'nextId', 'creatures', 'bushes', 'graves', 'events', 'hist', 'stats'];
@@ -866,12 +966,13 @@ export function normalize(w) {
   for (const k of PERSIST) w[k] = o[k];
 }
 
-export function advance(w, target, budgetMs, now) {
-  // advance up to `target`; if budgetMs and now() given, stop when out of time
+export function advance(w, target, budgetMs, now, editsAt) {
+  // advance up to `target`; if budgetMs and now() given, stop when out of time.
+  // editsAt(tick) returns the visitor edits that take effect on that tick.
   const t0 = now ? now() : 0;
   let n = 0;
   while (w.tick < target) {
-    step(w);
+    step(w, editsAt ? editsAt(w.tick + 1) : null);
     n++;
     if (budgetMs && (n & 63) === 0 && now() - t0 > budgetMs) break;
   }

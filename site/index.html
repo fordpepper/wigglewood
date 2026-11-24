@@ -34,6 +34,28 @@
   </nav>
 </header>
 
+<div class="tools" role="toolbar" aria-label="Change the island" aria-orientation="vertical">
+  <button class="tool on" type="button" data-tool="look" aria-pressed="true" title="Look around">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 16c4-7 9-10 13-10s9 3 13 10c-4 7-9 10-13 10S7 23 3 16z" fill="#fff" stroke="#141414" stroke-width="3" stroke-linejoin="round"/><circle cx="16" cy="16" r="5" fill="#141414"/></svg>
+    <span>Look</span>
+  </button>
+  <button class="tool" type="button" data-tool="dumpling" aria-pressed="false" title="Drop in a dumpling">
+    <canvas width="44" height="44" data-portrait="0" aria-hidden="true"></canvas><span>Dumpling</span>
+  </button>
+  <button class="tool" type="button" data-tool="grumble" aria-pressed="false" title="Drop in a grumble">
+    <canvas width="44" height="44" data-portrait="1" aria-hidden="true"></canvas><span>Grumble</span>
+  </button>
+  <button class="tool" type="button" data-tool="berries" aria-pressed="false" title="Fill a bush with berries">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4c-1 5-3 7-6 9M16 4c2 4 5 6 8 7" fill="none" stroke="#2f7a2f" stroke-width="3" stroke-linecap="round"/><circle cx="10" cy="19" r="6" fill="#e8344e" stroke="#141414" stroke-width="2.5"/><circle cx="21" cy="21" r="6" fill="#e8344e" stroke="#141414" stroke-width="2.5"/><circle cx="16" cy="12" r="5" fill="#e8344e" stroke="#141414" stroke-width="2.5"/></svg>
+    <span>Berries</span>
+  </button>
+  <button class="tool" type="button" data-tool="zap" aria-pressed="false" title="Zap a creature">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M19 2 7 18h8l-3 12 13-17h-8z" fill="#fff27a" stroke="#141414" stroke-width="2.5" stroke-linejoin="round"/></svg>
+    <span>Zap</span>
+  </button>
+  <div class="swatches" id="swatches" hidden role="group" aria-label="Colour for new creatures"></div>
+</div>
+
 <section id="feed" class="feed" aria-live="polite" aria-label="What's happening"></section>
 
 <footer class="counts" aria-label="Population">
@@ -63,6 +85,10 @@
     <button id="btn-follow" class="btn btn-main" type="button">Follow</button>
     <button id="btn-share" class="btn" type="button">Copy link</button>
   </div>
+  <div class="card-actions card-edit">
+    <button id="btn-feed" class="btn" type="button">Feed</button>
+    <button id="btn-zap" class="btn btn-danger" type="button">Zap</button>
+  </div>
 </aside>
 
 <section id="graph-panel" class="panel graph-panel" hidden>
@@ -91,6 +117,8 @@
   <p>Wigglewood is a little island that never stops. Dumplings eat berries, grumbles eat dumplings, and both have babies that inherit their parents' genes with small changes. Over time the island figures out what works.</p>
   <p>It's the same world for everyone. The whole island is worked out from the current time, so if you and a friend open it at the same moment you'll see the same creatures in the same places. Close the tab and come back tomorrow: life carried on without you.</p>
   <p>The sky follows your own clock, so it's night here when it's night where you are. Seasons belong to the island: each one lasts three hours.</p>
+  <h3>Changing things</h3>
+  <p>Use the tools on the right to drop in dumplings or grumbles, fill a bush with berries, or zap a creature. Changes show up for everyone a few seconds later. The whole island shares a limit of 40 changes a minute.</p>
   <h3>Looking around</h3>
   <ul>
     <li>Drag to move, scroll or pinch to zoom.</li>

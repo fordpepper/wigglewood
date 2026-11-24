@@ -2,6 +2,7 @@ import * as S from '../sim/core.js';
 import * as T from './terrain.js';
 import * as SP from './sprites.js';
 import * as UI from './ui.js';
+import { EditFeed, sendEdit } from './edits.js';
 
 // older Safari has no roundRect
 if (!CanvasRenderingContext2D.prototype.roundRect) {
@@ -36,7 +37,10 @@ const app = {
   keys: new Set(),
   shake: new Map(), // bush index -> until (ms)
   sums: new Map(), // checkpoint tick -> checksum we computed ourselves
+  tool: 'look', // look | dumpling | grumble | berries | zap
+  ring: [], // recent snapshots, to rewind when an edit arrives late
 };
+app.feed = new EditFeed(e => onEditArrived(e));
 
 // Every few minutes compare our own checkpoint with the one GitHub saved. If they
 // ever disagree (say the rules changed while this tab was open) start over from theirs.
@@ -105,9 +109,12 @@ async function boot() {
   if (mine && (!w || mine.tick > w.tick) && mine.tick <= S.tickAt(Date.now())) w = mine;
   if (!w) w = S.genesis();
   app.w = w;
+  // visitor edits made since that checkpoint, so we replay them too
+  await app.feed.backfill(S.msAt(w.tick) / 1000 - 90);
+  app.feed.listen();
   await catchUp(true);
   T.warmup(seasonNow());
-  UI.init(app, { flyTo, select, deselect, pickRandom, setFollow });
+  UI.init(app, { flyTo, select, deselect, pickRandom, setFollow, setTool, edit });
   chooseStartView();
   app.live = true;
   UI.hideLoader();
@@ -121,7 +128,7 @@ function catchUp(first) {
       const target = S.tickAt(Date.now());
       // stop at checkpoint boundaries so we can remember them
       const boundary = (Math.floor(app.w.tick / S.CHECKPOINT_TICKS) + 1) * S.CHECKPOINT_TICKS;
-      S.advance(app.w, Math.min(target, boundary), 28, () => performance.now());
+      S.advance(app.w, Math.min(target, boundary), 28, () => performance.now(), app.feed.editsAt);
       if (app.w.tick === boundary) saveLocalCheckpoint();
       const done = app.w.tick >= target;
       const total = Math.max(1, target - start);
@@ -210,7 +217,7 @@ function clampCam() {
 }
 
 function resize() {
-  app.dpr = Math.min(window.devicePixelRatio || 1, 2);
+  app.dpr = Math.min(window.devicePixelRatio || 1, app.low ? 1 : 2);
   app.W = window.innerWidth; app.H = window.innerHeight;
   canvas.width = Math.round(app.W * app.dpr); canvas.height = Math.round(app.H * app.dpr);
   if (app.w) { setZoom(app.cam.z); clampCam(); }
@@ -234,17 +241,75 @@ function stepLive() {
   while (app.w.tick < target && n < 60) {
     app.prev.clear();
     for (const c of app.w.creatures) app.prev.set(c.id, [c.x, c.y]);
-    S.step(app.w);
+    S.step(app.w, app.feed.editsAt(app.w.tick + 1));
     n++;
+    if (app.w.tick % 40 === 0) {
+      app.ring.push({ tick: app.w.tick, s: S.serialize(app.w) });
+      if (app.ring.length > 15) app.ring.shift();
+    }
     if (app.w.tick % S.CHECKPOINT_TICKS === 0) { app.sums.set(app.w.tick, S.checksum(app.w)); saveLocalCheckpoint(); }
     handleFx(app.w.fx, target - app.w.tick < 4);
   }
   if (n) UI.onTick(app);
+  if (n && app.w.tick % 2400 === 0) app.feed.prune(app.w.tick - 7200);
   // forget render state of creatures that are gone
   if (n && app.w.tick % 240 === 0) {
     const alive = new Set(app.w.creatures.map(c => c.id));
     for (const m of [app.facing, app.walk, app.look]) for (const id of m.keys()) if (!alive.has(id)) m.delete(id);
     for (const id of app.seen) if (!alive.has(id)) app.seen.delete(id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// visitor edits
+
+// an edit from anyone (including us) arrived
+function onEditArrived(e) {
+  if (!app.w || e.t > app.w.tick) return; // still in the future: it'll be applied on time
+  // it should already have happened: rewind to a snapshot before it and replay
+  let snap = null;
+  for (let i = app.ring.length - 1; i >= 0; i--) if (app.ring[i].tick < e.t) { snap = app.ring[i]; break; }
+  if (!snap) { console.warn('edit arrived too late to replay', e); return; }
+  app.ring = app.ring.filter(r => r.tick <= snap.tick);
+  const target = app.w.tick;
+  // checkpoints we passed since then were missing this edit
+  for (const t of app.sums.keys()) if (t > snap.tick) app.sums.delete(t);
+  if (Math.floor(target / S.CHECKPOINT_TICKS) > Math.floor(snap.tick / S.CHECKPOINT_TICKS)) {
+    try { localStorage.removeItem(LOCAL_KEY); } catch (err) { /* ignore */ }
+  }
+  app.w = S.deserialize(snap.s);
+  S.advance(app.w, target, 0, null, app.feed.editsAt);
+  app.prev.clear();
+}
+
+let busy = false;
+async function edit(payload, x, y) {
+  if (busy) return;
+  busy = true;
+  if (x !== undefined) addParticle({ kind: 'pending', x, y, life: S.EDIT_DELAY / S.TPS + 1.5 });
+  const err = await sendEdit(payload);
+  busy = false;
+  if (err) UI.toast(err);
+}
+
+function setTool(tool) {
+  app.tool = tool;
+  canvas.classList.toggle('editing', tool !== 'look');
+  UI.syncTool(app);
+}
+
+function useTool(sx, sy) {
+  const [x, y] = screenToWorld(sx, sy);
+  const t = app.tool;
+  if (t === 'zap') {
+    const c = creatureAt(sx, sy);
+    if (!c) { UI.toast('Tap right on a creature to zap it.'); return; }
+    edit({ k: 'zap', c: c.id }, c.x, c.y);
+  } else if (t === 'berries') {
+    edit({ k: 'berries', x, y }, x, y);
+  } else {
+    if (!S.walkable(x, y)) { UI.toast('That’s not solid ground. Try somewhere on land.'); return; }
+    edit({ k: 'spawn', s: t === 'grumble' ? S.GRUMBLE : S.DUMPLING, x, y, h: UI.pickedHue(t) }, x, y);
   }
 }
 
@@ -272,6 +337,10 @@ function handleFx(fx, visible) {
         for (let i = 0; i < 6; i++) addParticle({ kind: 'puff', x: f.x + (Math.random() - 0.5) * 20, y: f.y - 10 - Math.random() * 10, vx: (Math.random() - 0.5) * 30, vy: -10 - Math.random() * 15, life: 0.8, r: 6 + Math.random() * 5 });
         break;
       case 'poof':
+        if (f.cause === 'zapped') {
+          addParticle({ kind: 'zap', x: f.x, y: f.y, life: 0.5 });
+          addParticle({ kind: 'text', text: 'ZAP!', x: f.x, y: f.y - 40, vy: -14, life: 1.1, size: 20, color: '#fff27a', rot: (Math.random() - 0.5) * 0.3 });
+        }
         for (let i = 0; i < 7; i++) addParticle({ kind: 'puff', x: f.x + (Math.random() - 0.5) * 20, y: f.y - 8 - Math.random() * 12, vx: (Math.random() - 0.5) * 30, vy: -8 - Math.random() * 12, life: 0.9, r: 5 + Math.random() * 6 });
         addParticle({ kind: 'ghost', x: f.x, y: f.y - 6, life: 2.6, s: f.s === 1 ? 1.2 : 0.9 });
         if (f.id === app.selected) UI.onSelectedDied(app, f);
@@ -280,6 +349,17 @@ function handleFx(fx, visible) {
         addParticle({ kind: 'text', text: '!?', follow: f.id, dy: -46, life: 1.2, size: 18, color: '#ffffff' });
         break;
       case 'yawn':
+        break;
+      case 'spawned':
+        addParticle({ kind: 'sparkle', x: f.x, y: f.y - 14, life: 1.2 });
+        addParticle({ kind: 'text', text: 'POP!', x: f.x, y: f.y - 44, vy: -12, life: 1.1, size: 18, color: '#ffd23f' });
+        break;
+      case 'fed':
+        addParticle({ kind: 'text', text: 'yum', follow: f.id, dy: -40, life: 1.2, size: 16, color: '#8fe37a' });
+        break;
+      case 'refill':
+        app.shake.set(f.x * 7 + f.y, now + 400);
+        addParticle({ kind: 'sparkle', x: f.x, y: f.y - 16, life: 1 });
         break;
     }
     if (c && f.k === 'love') addParticle({ kind: 'sparkle', x: f.x, y: f.y - 10, life: 0.8 });
@@ -307,15 +387,40 @@ function byId(id) {
 // ---------------------------------------------------------------------------
 // render
 
+// Quality adapts to the device: if drawing a frame takes too long we switch to
+// a lighter mode (1x pixels, 30 fps, fewer effects); if it gets cheap again we
+// switch back.
+app.low = (navigator.hardwareConcurrency || 8) <= 2 || (navigator.deviceMemory || 8) <= 2;
+const perf = app.perf = { cost: 6, gap: 16, slowFor: 0, fastFor: 0, frame: 0 };
+const forcedQuality = new URLSearchParams(location.search).get('quality'); // 'high' | 'low' for testing
+if (forcedQuality) app.low = forcedQuality === 'low';
+function adaptQuality(cost, dt) {
+  perf.cost += (cost - perf.cost) * 0.05;
+  perf.gap += (dt * 1000 - perf.gap) * 0.05; // time between frames we draw (includes painting)
+  if (forcedQuality || document.hidden) return;
+  if (!app.low && (perf.cost > 13 || perf.gap > 30)) perf.slowFor += dt; else perf.slowFor = 0;
+  if (app.low && perf.cost < 4) perf.fastFor += dt; else perf.fastFor = 0;
+  if (perf.slowFor > 2.5 || perf.fastFor > 20) {
+    app.low = !app.low;
+    perf.slowFor = perf.fastFor = 0;
+    resize();
+  }
+}
+
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - app.lastFrame) / 1000);
-  app.lastFrame = now;
+  const t0 = performance.now();
   if (app.live) stepLive();
   if (!app.w) return;
+  // in light mode draw every other frame
+  perf.frame++;
+  if (app.low && perf.frame % 2 && !document.hidden) return;
+  app.lastFrame = now;
   updateCamera(dt);
   render(now / 1000, dt);
-  T.pumpTiles(6);
+  T.pumpTiles(app.low ? 3 : 6);
+  adaptQuality(performance.now() - t0, dt);
 }
 
 function updateCamera(dt) {
@@ -387,8 +492,10 @@ function render(t, dt) {
   T.drawGround(ctx, season, z * dpr, view);
   SP.setRenderScale(z * dpr);
 
-  drawWaterSparkles(t, view, season);
-  drawCloudShadows(t, view, w);
+  if (!app.low) {
+    drawWaterSparkles(t, view, season);
+    drawCloudShadows(t, view, w);
+  }
 
   // gather everything that stands up, sort by base y
   const sc = S.scenery();
@@ -444,7 +551,7 @@ function render(t, dt) {
       drawCreature(o, it[3], t, dt);
     } else {
       ctx.translate(o.x, o.y);
-      if ((kind === 0 || kind === 1) && occluded(o)) {
+      if ((kind === 0 || kind === 1) && !app.low && occluded(o)) {
         drawFaded(kind === 0 ? 46 : 40, kind === 0 ? 95 : 45, c2 => kind === 0 ? SP.drawTree(c2, o, season, t, night) : SP.drawRock(c2, o, season));
       } else if (kind === 0) SP.drawTree(ctx, o, season, t, night);
       else if (kind === 1) SP.drawRock(ctx, o, season);
@@ -457,7 +564,7 @@ function render(t, dt) {
   }
 
   // emotes and particles on top
-  if (z * dpr > 0.75) for (const [c, p] of drawn) drawEmote(c, p, t);
+  if (z * dpr > (app.low ? 1.2 : 0.75)) for (const [c, p] of drawn) drawEmote(c, p, t);
   drawParticles(t, dt);
   if (sel) drawNameTag(sel, renderPos(sel, a), true);
   if (app.hover >= 0 && app.hover !== app.selected) {
@@ -471,7 +578,7 @@ function render(t, dt) {
   drawSky(sun, weather, season);
   drawWeather(t, dt, weather);
   ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * (W / 2 - cam.x * z), dpr * (H / 2 - cam.y * z));
-  if (night > 0.05) drawNightLights(t, dt, view, drawn, night);
+  if (night > 0.05 && !app.low) drawNightLights(t, dt, view, drawn, night);
 }
 
 // draw something into a scratch canvas, then stamp it semi-transparent
@@ -526,7 +633,7 @@ function drawCreature(c, p, t, dt) {
     app.seen.add(c.id);
     if (c.age < 40) addParticle({ kind: 'sparkle', x: p[0], y: p[1] - 12, life: 0.9 });
   }
-  if (S.radius(c) * app.cam.z * app.dpr < 11) {
+  if (S.radius(c) * app.cam.z * app.dpr < (app.low ? 16 : 11)) {
     if (c.st === S.ST.SLEEP) o.mood = 'closed';
     SP.drawTiny(ctx, c, o);
     return;
@@ -661,6 +768,22 @@ function drawParticles(t, dt) {
       case 'ghost':
         SP.drawGhost(ctx, k, p.s);
         break;
+      case 'pending': {
+        // dashed ring while the edit travels to everyone
+        ctx.setLineDash([5, 5]); ctx.lineDashOffset = -t * 30;
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3;
+        ctx.globalAlpha = k > 0.8 ? (1 - k) * 5 : 1;
+        ctx.beginPath(); ctx.ellipse(0, 0, 22, 9, 0, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = SP.INK; ctx.lineDashOffset = -t * 30 + 5; ctx.lineWidth = 1.5; ctx.stroke();
+        break;
+      }
+      case 'zap': {
+        ctx.globalAlpha = 1 - k;
+        ctx.strokeStyle = '#fff27a'; ctx.lineWidth = 6; ctx.lineJoin = 'miter';
+        ctx.beginPath(); ctx.moveTo(6, -120); ctx.lineTo(-8, -60); ctx.lineTo(6, -55); ctx.lineTo(-4, -2); ctx.stroke();
+        ctx.strokeStyle = SP.INK; ctx.lineWidth = 2; ctx.stroke();
+        break;
+      }
       case 'sparkle':
         ctx.globalAlpha = 1 - k;
         for (let j = 0; j < 4; j++) drawStar(Math.cos(j * 1.57 + k * 2) * (8 + k * 16), Math.sin(j * 1.57 + k * 2) * (8 + k * 12), 3.5 * (1 - k * 0.5));
@@ -758,7 +881,7 @@ const drops = [];
 function drawWeather(t, dt, weather) {
   const cw = canvas.width, ch = canvas.height, dpr = app.dpr;
   if ((weather !== 'rain' && weather !== 'snow') || app.reducedMotion) { drops.length = 0; return; }
-  const want = Math.round((cw * ch) / (weather === 'rain' ? 9000 : 14000) / dpr);
+  const want = Math.round((cw * ch) / (weather === 'rain' ? 9000 : 14000) / dpr / (app.low ? 3 : 1));
   while (drops.length < want) drops.push({ x: Math.random() * cw, y: Math.random() * ch, s: 0.6 + Math.random() * 0.8, p: Math.random() * 6 });
   drops.length = Math.min(drops.length, want);
   ctx.save();
@@ -889,7 +1012,8 @@ function endPointer(e) {
   canvas.classList.remove('dragging');
   if (drag && !drag.pinch && drag.moved <= 6 && performance.now() - drag.t < 600 && e.type === 'pointerup') {
     const c = creatureAt(e.clientX, e.clientY);
-    if (c) select(c.id, false); else deselect();
+    if (app.tool !== 'look') useTool(e.clientX, e.clientY);
+    else if (c) select(c.id, false); else deselect();
   }
   if (pointers.size === 1) {
     const [p] = [...pointers.values()];
@@ -926,7 +1050,7 @@ window.addEventListener('keydown', e => {
   } else if (k === '+' || k === '=') zoomAt(app.W / 2, app.H / 2, 1.25);
   else if (k === '-' || k === '_') zoomAt(app.W / 2, app.H / 2, 0.8);
   else if (k === 'f' && app.selected >= 0) setFollow(!app.following);
-  else if (k === 'Escape') { if (!UI.closePanels()) deselect(); }
+  else if (k === 'Escape') { if (app.tool !== 'look') setTool('look'); else if (!UI.closePanels()) deselect(); }
 });
 window.addEventListener('keyup', e => app.keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
 window.addEventListener('blur', () => app.keys.clear());
