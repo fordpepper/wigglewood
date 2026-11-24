@@ -1,596 +1,472 @@
-// Hand-drawn style sprites: flat colours, thick ink outlines, googly eyes.
-// Everything is drawn in world units with the feet/base at (0, 0).
+// Pixel art sprites: creatures, scenery and little effects. Everything is
+// built procedurally from the shapes in pixel.js and cached, then stamped onto
+// the low-resolution art buffer with its anchor (the feet) at a whole pixel.
+// `u` is art pixels per world unit, so sprites shrink with the zoom level.
 import * as S from '../sim/core.js';
+import { Pix, Cache, INK, WHITE, rgb, hex, hsl, shade, css, stamp } from './pixel.js';
 
-export const INK = '#141414';
-const TAU = Math.PI * 2;
+export { INK };
+const sprites = new Cache(2600);
 
-export function hsl(h, s, l) { return `hsl(${h.toFixed(1)},${s.toFixed(1)}%,${l.toFixed(1)}%)`; }
+// ---------------------------------------------------------------------------
+// colours
 
-export function dumplingColors(g) {
+export function creatureColors(s, g) {
   const h = g[S.G_HUE];
-  const l = 64 + g[S.G_LIGHT] * 40;
-  return {
-    body: hsl(h, 78, l),
-    dark: hsl(h, 60, l - 16),
-    light: hsl(h, 85, Math.min(92, l + 16)),
-  };
-}
-export function grumbleColors(g) {
-  const h = g[S.G_HUE];
+  if (s === 0) {
+    const l = 64 + g[S.G_LIGHT] * 40;
+    return { body: hsl(h, 78, l), dark: hsl(h, 62, l - 17), light: hsl(h, 90, Math.min(92, l + 15)), lid: hsl(h, 55, l - 25) };
+  }
   const l = 44 + g[S.G_LIGHT] * 40;
-  return {
-    body: hsl(h, 46, l),
-    dark: hsl(h, 42, l - 14),
-    light: hsl(h, 40, Math.min(85, l + 22)),
+  return { body: hsl(h, 46, l), dark: hsl(h, 44, l - 14), light: hsl(h, 40, Math.min(85, l + 22)), lid: hsl(h, 44, l - 16) };
+}
+export function bodyCss(s, g) { return css(creatureColors(s, g).body); }
+
+const PINK = rgb(255, 128, 150), MOUTH = rgb(122, 34, 48), CREAM = hex('#f3ead2'), LEAF = hex('#6cc04a');
+const YELLOW = hex('#ffd23f'), BERRY = hex('#e8344e'), PLUM = hex('#7c3bd1');
+
+// ---------------------------------------------------------------------------
+// creatures
+//
+// frames: 0 = standing, 1 = breathing in, 2..5 = walk cycle
+
+export function creatureR(c, u) { return S.radius(c) * u; }
+
+function bodyBox(R) { const w = Math.ceil(R * 3.2) + 6, h = Math.ceil(R * 3.6) + 8; return [w, h, Math.floor(w / 2), h - 2]; }
+
+function buildDumpling(c, R, frame) {
+  const g = c.g, col = creatureColors(0, g);
+  const [w, h, ax, ay] = bodyBox(R);
+  const p = new Pix(w, h, ax, ay);
+  const walking = frame >= 2, step = frame - 2;
+  const bob = walking && (step === 1 || step === 3) ? 1 : 0;
+  const squash = frame === 1 ? 1 : 0;
+  const footH = Math.max(1, Math.round(R * 0.22));
+  // feet (one lifts while walking)
+  if (R >= 2.5) {
+    for (const sd of [-1, 1]) {
+      const lift = walking && ((step === 1 && sd < 0) || (step === 3 && sd > 0)) ? 1 : 0;
+      p.ellipse(sd * R * 0.5, -footH * 0.5 - lift, Math.max(1, R * 0.3), Math.max(0.8, footH * 0.6), col.dark);
+    }
+  }
+  const rx = R * (1 + squash * 0.05), rTop = R * 1.32 - squash, rBot = R * 0.42;
+  const yc = -footH - rBot + 0.6 - bob;
+  const top = yc - rTop;
+  // ears sit behind the body
+  if (g[S.G_TOP] === 3 && R >= 3) for (const sd of [-1, 1]) p.ellipse(sd * R * 0.58, top + R * 0.3, R * 0.28, R * 0.3, col.body);
+  const inBody = (x, y) => { const dy = y - yc; return (x / rx) ** 2 + (dy / (dy < 0 ? rTop : rBot)) ** 2 <= 1; };
+  p.fill(-rx - 1, top - 1, rx + 1, yc + rBot + 1, inBody, col.body);
+  // pattern
+  const pat = g[S.G_PAT];
+  const onBody = (x, y) => inBody(x + 0.5, y + 0.5);
+  if (pat === 1 && R >= 3) {
+    for (const [sx, sy, sr] of [[-0.5, -0.75, 0.24], [0.1, -0.15, 0.17], [0.7, -0.95, 0.15], [-0.75, -0.2, 0.14]]) {
+      p.paint((x, y) => onBody(x, y) && ((x + 0.5 - sx * R) ** 2 + (y + 0.5 - (yc + sy * rTop)) ** 2) <= (sr * R + 0.4) ** 2, col.dark, col.body);
+    }
+  } else if (pat === 2) {
+    p.paint((x, y) => onBody(x, y) && ((x + 0.5 - R * 0.15) / (R * 0.62)) ** 2 + ((y + 0.5 - yc - rBot * 0.2) / (R * 0.55)) ** 2 <= 1, col.light, col.body);
+  } else if (pat === 3 && R >= 3) {
+    for (const sx of [-0.5, 0, 0.5]) p.paint((x, y) => onBody(x, y) && Math.abs(x + 0.5 - sx * R) < Math.max(0.5, R * 0.1) && y + 0.5 < yc - rTop * 0.45, col.dark, col.body);
+  }
+  // shading: dark along the bottom and back, a highlight on the top
+  if (R >= 2.5) {
+    p.rim(0, 1, col.dark, col.body);
+    p.rim(-1, 0, col.dark, col.body);
+    p.paint((x, y) => {
+      const hx = x + 0.5 + R * 0.38, hy = y + 0.5 - (top + rTop * 0.32);
+      return hx * hx / (R * 0.24 + 0.3) ** 2 + hy * hy / (R * 0.16 + 0.3) ** 2 <= 1;
+    }, col.light, col.body);
+  }
+  accessory(p, g[S.G_TOP], R, top, col);
+  p.outline();
+  return { p, yc, rTop, rBot, top, R };
+}
+
+function accessory(p, kind, R, top, col) {
+  if (R < 3) return;
+  if (kind === 1) { // leaf sprout
+    p.line(0, top - 1, 0, top - R * 0.35, INK);
+    p.ellipse(R * 0.3, top - R * 0.5, R * 0.3, R * 0.17, LEAF);
+  } else if (kind === 2) { // bobble antenna
+    p.line(0, top - 1, R * 0.15, top - R * 0.5, INK);
+    p.ellipse(R * 0.18, top - R * 0.7, R * 0.19 + 0.3, R * 0.19 + 0.3, col.light);
+  } else if (kind === 4) { // curly tuft
+    const x0 = Math.round(R * 0.05), y0 = Math.round(top);
+    for (const [dx, dy] of [[0, -1], [0, -2], [1, -3], [2, -3], [3, -2], [2, -1]]) p.set(x0 + dx, y0 + dy, INK, true);
+  } else if (kind === 5) { // little flower
+    p.line(0, top - 1, 0, top - R * 0.32, INK);
+    const fy = Math.round(top - R * 0.5) - 1;
+    for (const [dx, dy] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) p.set(dx, fy + dy, WHITE);
+    p.set(0, fy, YELLOW);
+  }
+}
+
+function buildGrumble(c, R, frame) {
+  const g = c.g, col = creatureColors(1, g);
+  const [w, h, ax, ay] = bodyBox(R * 1.05);
+  const p = new Pix(w, h, ax, ay);
+  const walking = frame >= 2, step = frame - 2;
+  const bob = walking && (step === 1 || step === 3) ? 1 : 0;
+  const legH = Math.max(1, Math.round(R * 0.3));
+  if (R >= 2.5) {
+    for (const sd of [-1, 1]) {
+      const lift = walking && ((step === 1 && sd < 0) || (step === 3 && sd > 0)) ? 1 : 0;
+      const lw = Math.max(1, Math.round(R * 0.32));
+      p.rect(Math.round(sd * R * 0.5 - lw / 2), -legH - lift + 1, lw, legH, col.dark);
+    }
+  }
+  const breathe = frame === 1 ? 1 : 0;
+  const rx = R * 1.05, ryT = R * 1.0 - breathe * 0.5, ryB = R * 0.38;
+  const yc = -legH - ryB + 0.8 - bob;
+  // hunched: a round body with a big shoulder hump behind the head
+  const inBody = (x, y) => {
+    const dy = y - yc;
+    if ((x / rx) ** 2 + (dy / (dy < 0 ? ryT : ryB)) ** 2 <= 1) return true;
+    const hx = x + R * 0.25, hy = y - (yc - R * 0.42);
+    return (hx / (R * 0.78)) ** 2 + (hy / (R * 0.78)) ** 2 <= 1;
   };
+  const top = yc - R * 1.2;
+  // horns
+  if (R >= 3) {
+    for (const sd of [-1, 1]) {
+      const bx = sd * R * 0.12 + R * 0.05;
+      p.poly([[bx + sd * R * 0.15, top + R * 0.45], [bx + sd * R * 0.42, top - R * 0.3], [bx + sd * R * 0.78, top - R * 0.32], [bx + sd * R * 0.58, top + R * 0.5]], CREAM);
+    }
+  }
+  p.fill(-rx - R, top - 1, rx + 1, yc + ryB + 1, inBody, col.body);
+  const onBody = (x, y) => inBody(x + 0.5, y + 0.5);
+  // pale belly
+  p.paint((x, y) => onBody(x, y) && ((x + 0.5 - R * 0.2) / (R * 0.62)) ** 2 + ((y + 0.5 - yc - ryB * 0.3) / (R * 0.5)) ** 2 <= 1, col.light, col.body);
+  if (g[S.G_PAT] === 1 && R >= 3) {
+    for (const [sx, sy, sr] of [[-0.55, -0.95, 0.18], [0.45, -0.85, 0.13], [-0.85, -0.45, 0.12]]) {
+      p.paint((x, y) => ((x + 0.5 - sx * R) ** 2 + (y + 0.5 - (yc + sy * R)) ** 2) <= (sr * R + 0.4) ** 2, col.dark, col.body);
+    }
+  } else if (g[S.G_PAT] === 3 && R >= 3) {
+    for (const sx of [-0.5, 0]) p.paint((x, y) => Math.abs(x + 0.5 - sx * R) < Math.max(0.5, R * 0.09) && y + 0.5 < yc - R * 0.55, col.dark, col.body);
+  }
+  if (R >= 2.5) {
+    p.rim(0, 1, col.dark, col.body);
+    p.rim(-1, 0, col.dark, col.body);
+    // scruffy tufts on the back
+    if (R >= 5) for (const [sx, sy] of [[-0.75, -0.75], [-0.45, -1.05]]) {
+      const x = Math.round(sx * R), y = Math.round(yc + sy * R);
+      if (p.get(x, y) === col.body) { p.set(x, y, col.dark); p.set(x + 1, y + 1, col.dark); p.set(x + 2, y, col.dark); }
+    }
+  }
+  p.outline();
+  return { p, yc, rTop: R * 1.2, rBot: ryB, top, R };
 }
 
-function ellipse(ctx, x, y, rx, ry) { ctx.beginPath(); ctx.ellipse(x, y, Math.abs(rx), Math.abs(ry), 0, 0, TAU); }
-
-export function shadow(ctx, r) {
-  ctx.fillStyle = 'rgba(20,30,20,0.18)';
-  ellipse(ctx, 0, 0, r * 1.05, r * 0.36);
-  ctx.fill();
+function bodySprite(c, u, frame, facing) {
+  const R = Math.max(1.2, Math.round(creatureR(c, u) * 2) / 2);
+  return sprites.get(`c${c.id}|${R}|${frame}|${facing}|${c.g[S.G_HUE]}`, () => {
+    const b = c.s === 0 ? buildDumpling(c, R, frame) : buildGrumble(c, R, frame);
+    const p = facing < 0 ? b.p.mirror() : b.p;
+    const cv = p.canvas();
+    cv.meta = b;
+    return cv;
+  });
 }
 
-// ---------------------------------------------------------------------------
-// eyes
+// pixels helper for the live overlay (eyes, mouth): x is relative to the
+// anchor and mirrored for creatures facing left
+function dot(ctx, X, Y, f, x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(f > 0 ? X + x : X - x - w, Y + y, w, h);
+}
 
-function eye(ctx, x, y, r, lookX, lookY, mood, lw) {
-  // mood: 'open' | 'wide' | 'closed' | 'grumpy' | 'happy' | 'dizzy' | 'dead'
-  ctx.lineWidth = lw;
-  ctx.strokeStyle = INK;
-  if (mood === 'closed' || mood === 'happy') {
-    ctx.beginPath();
-    if (mood === 'closed') ctx.arc(x, y - r * 0.1, r * 0.7, 0.15 * Math.PI, 0.85 * Math.PI);
-    else ctx.arc(x, y + r * 0.35, r * 0.7, 1.15 * Math.PI, 1.85 * Math.PI);
-    ctx.stroke();
+const INK_C = css(INK), WHITE_C = '#ffffff', MOUTH_C = css(MOUTH), PINK_C = css(PINK);
+
+function eye(ctx, X, Y, f, x0, y0, E, o, lidColor) {
+  const mood = o.mood;
+  if (E <= 1) { dot(ctx, X, Y, f, x0, y0, 1, mood === 'closed' || mood === 'happy' ? 1 : 2, INK_C); return; }
+  if (mood === 'closed') { dot(ctx, X, Y, f, x0, y0 + Math.floor(E / 2), E, 1, INK_C); return; }
+  if (mood === 'dizzy' || mood === 'dead') { // little x eyes
+    const n = Math.min(E, 3), xo = x0 + Math.floor((E - n) / 2), yo = y0 + Math.floor((E - n) / 2);
+    for (let i = 0; i < n; i++) { dot(ctx, X, Y, f, xo + i, yo + i, 1, 1, INK_C); dot(ctx, X, Y, f, xo + n - 1 - i, yo + i, 1, 1, INK_C); }
     return;
   }
-  ctx.fillStyle = '#ffffff';
-  ellipse(ctx, x, y, r, r * 1.06);
-  ctx.fill(); ctx.stroke();
-  if (mood === 'dizzy' || mood === 'dead') {
-    ctx.lineWidth = lw * 1.1;
-    const s = r * 0.45;
-    ctx.beginPath();
-    ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s);
-    ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s);
-    ctx.stroke();
+  if (mood === 'happy') {
+    const m = y0 + Math.floor(E / 2);
+    dot(ctx, X, Y, f, x0, m, 1, 1, INK_C); dot(ctx, X, Y, f, x0 + E - 1, m, 1, 1, INK_C);
+    if (E >= 3) dot(ctx, X, Y, f, x0 + 1, m - 1, E - 2, 1, INK_C);
     return;
   }
-  const pr = mood === 'wide' ? r * 0.36 : r * 0.5;
-  const reach = r - pr - lw * 0.4;
-  ctx.fillStyle = INK;
-  ellipse(ctx, x + lookX * reach, y + lookY * reach, pr, pr * 1.08);
-  ctx.fill();
-  // tiny highlight
-  ctx.fillStyle = '#ffffff';
-  ellipse(ctx, x + lookX * reach - pr * 0.35, y + lookY * reach - pr * 0.4, pr * 0.28, pr * 0.28);
-  ctx.fill();
-  if (mood === 'grumpy') {
-    // heavy lid across the top of the eye, flat and a little tilted
-    ctx.save();
-    ellipse(ctx, x, y, r, r * 1.06); ctx.clip();
-    ctx.fillStyle = ctx.__lid || '#555';
-    ctx.fillRect(x - r * 1.2, y - r * 1.3, r * 2.4, r * 0.95);
-    ctx.restore();
-    ctx.lineWidth = lw;
-    ctx.beginPath(); ctx.moveTo(x - r * 1.05, y - r * 0.32); ctx.lineTo(x + r * 1.05, y - r * 0.4); ctx.stroke();
-    ellipse(ctx, x, y, r, r * 1.06); ctx.stroke();
+  // ink frame with the corners knocked off, white inside
+  dot(ctx, X, Y, f, x0, y0 - 1, E, 1, INK_C); dot(ctx, X, Y, f, x0, y0 + E, E, 1, INK_C);
+  dot(ctx, X, Y, f, x0 - 1, y0, 1, E, INK_C); dot(ctx, X, Y, f, x0 + E, y0, 1, E, INK_C);
+  dot(ctx, X, Y, f, x0, y0, E, E, WHITE_C);
+  const P = mood === 'wide' || E < 4 ? 1 : 2;
+  const lx = Math.max(-1, Math.min(1, o.lookX)), ly = Math.max(-1, Math.min(1, o.lookY));
+  const px = x0 + Math.round((E - P) * (0.5 + 0.35 * lx)), py = y0 + Math.round((E - P) * (0.5 + 0.35 * ly));
+  dot(ctx, X, Y, f, px, py, P, P, INK_C);
+  if (lidColor) { // heavy grumble lids
+    const lh = Math.max(1, Math.floor(E / 2));
+    dot(ctx, X, Y, f, x0, y0, E, lh, lidColor);
+    if (E >= 3) dot(ctx, X, Y, f, x0, y0 + lh, E, 1, INK_C);
   }
 }
 
-// ---------------------------------------------------------------------------
-// dumpling: a soft gumdrop with big eyes, tiny feet and something on its head
-
-// cheap version for when creatures are only a few pixels tall
-export function drawTiny(ctx, c, o) {
+// o: { frame, facing, mood, mouth, lookX, lookY, t, angry, blink }
+export function drawCreature(ctx, c, X, Y, o, u) {
+  const cv = bodySprite(c, u, o.frame, o.facing);
+  const b = cv.meta, R = b.R, f = o.facing;
+  ctx.drawImage(cv, X - cv.ax, Y - cv.ay);
+  if (R < 2) return;
   const D = c.s === 0;
-  const r = S.SPECIES[c.s].radius * c.g[S.G_SIZE] * (o.growth ?? 1);
-  const col = D ? dumplingColors(c.g) : grumbleColors(c.g);
-  const bob = o.moving ? Math.abs(Math.sin(o.walk * Math.PI)) * r * 0.14 : 0;
-  ctx.fillStyle = 'rgba(20,30,20,0.18)';
-  ellipse(ctx, 0, 0, r, r * 0.35); ctx.fill();
-  const h = D ? r * 1.1 : r * 1.3;
-  ctx.fillStyle = col.body; ctx.strokeStyle = INK; ctx.lineWidth = r * 0.22;
-  ellipse(ctx, 0, -h * 0.75 - bob, r * 1.02, h * 0.78);
-  ctx.fill(); ctx.stroke();
-  if (!D) {
-    ctx.fillStyle = '#f3ead2';
-    ctx.beginPath(); ctx.moveTo(-r * 0.7, -h * 1.4 - bob); ctx.lineTo(-r * 0.4, -h * 1.85 - bob); ctx.lineTo(-r * 0.2, -h * 1.45 - bob);
-    ctx.moveTo(r * 0.7, -h * 1.4 - bob); ctx.lineTo(r * 0.4, -h * 1.85 - bob); ctx.lineTo(r * 0.2, -h * 1.45 - bob); ctx.fill();
+  const col = creatureColors(c.s, c.g);
+  const E = Math.max(1, Math.min(5, Math.round(R * (D ? 0.5 : 0.4) * c.g[S.G_EYE])));
+  const ey = Math.round(b.yc - (D ? b.rTop * 0.45 : R * 0.55) - E / 2);
+  const ex2 = Math.round(R * (D ? 0.55 : 0.62) - E / 2);
+  const ex1 = ex2 - E - 1;
+  const mood = o.blink && o.mood === 'open' ? 'closed' : o.mood;
+  const oo = { mood, lookX: o.lookX, lookY: o.lookY };
+  const lid = !D && mood === 'grumpy' ? css(col.lid) : null;
+  if (!D && mood === 'grumpy') oo.mood = 'open';
+  eye(ctx, X, Y, f, ex1, ey, E, oo, lid);
+  eye(ctx, X, Y, f, ex2, ey, E, oo, lid);
+  if (o.angry && E >= 2) { // brows
+    dot(ctx, X, Y, f, ex1 - 1, ey - 3, 2, 1, INK_C); dot(ctx, X, Y, f, ex1 + 1, ey - 2, E, 1, INK_C);
+    dot(ctx, X, Y, f, ex2, ey - 2, E, 1, INK_C); dot(ctx, X, Y, f, ex2 + E - 1, ey - 3, 2, 1, INK_C);
   }
-  if (o.mood !== 'closed') {
-    ctx.fillStyle = '#ffffff';
-    const ex = o.facing * r * 0.3;
-    ellipse(ctx, ex - r * 0.3, -h * 0.95 - bob, r * 0.32, r * 0.34); ctx.fill();
-    ellipse(ctx, ex + r * 0.32, -h * 0.93 - bob, r * 0.3, r * 0.32); ctx.fill();
-    ctx.fillStyle = INK;
-    ellipse(ctx, ex - r * 0.27, -h * 0.95 - bob, r * 0.16, r * 0.17); ctx.fill();
-    ellipse(ctx, ex + r * 0.35, -h * 0.93 - bob, r * 0.15, r * 0.16); ctx.fill();
-  }
-}
-
-export function drawDumpling(ctx, c, o) {
-  // o: { t (seconds), walk (0..1 phase), moving, facing (+1/-1), lookX, lookY, mood, alpha }
-  const g = c.g;
-  const r = S.SPECIES[0].radius * g[S.G_SIZE] * (o.growth ?? 1);
-  const col = dumplingColors(g);
-  const lw = Math.max(1.6, r * 0.15);
-  const bob = o.moving ? Math.abs(Math.sin(o.walk * Math.PI)) * r * 0.16 : Math.sin(o.t * 2.2 + c.id) * r * 0.025;
-  const squash = o.moving ? 1 + Math.sin(o.walk * TAU) * 0.04 : 1 + Math.sin(o.t * 2.2 + c.id) * 0.03;
-  const w = r * 1.0 * (2 - squash), h = r * 1.22 * squash;
-  ctx.save();
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  shadow(ctx, r);
-  ctx.scale(o.facing, 1);
-
-  // feet
-  const step = o.moving ? Math.sin(o.walk * TAU) : 0;
-  ctx.fillStyle = col.dark; ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.85;
-  for (const s of [-1, 1]) {
-    const lift = o.moving ? Math.max(0, step * s) * r * 0.22 : 0;
-    ellipse(ctx, s * r * 0.48 + step * s * r * 0.08, -r * 0.08 - lift, r * 0.3, r * 0.17);
-    ctx.fill(); ctx.stroke();
-  }
-
-  ctx.translate(0, -r * 0.2 - bob);
-  // head accessory behind the body outline
-  topAccessory(ctx, g[S.G_TOP], r, h, lw, col, o.t + c.id);
-
-  // body
-  ctx.beginPath();
-  ctx.moveTo(-w, -h * 0.25);
-  ctx.bezierCurveTo(-w * 1.02, -h * 1.45, w * 1.02, -h * 1.45, w, -h * 0.25);
-  ctx.bezierCurveTo(w * 1.05, h * 0.22, w * 0.5, h * 0.3, 0, h * 0.3);
-  ctx.bezierCurveTo(-w * 0.5, h * 0.3, -w * 1.05, h * 0.22, -w, -h * 0.25);
-  ctx.closePath();
-  ctx.fillStyle = col.body;
-  ctx.fill();
-  // pattern, clipped to the body
-  if (g[S.G_PAT]) {
-    ctx.save();
-    ctx.clip();
-    patternFill(ctx, g[S.G_PAT], w, h, col, c.id);
-    ctx.restore();
-    ctx.beginPath();
-    ctx.moveTo(-w, -h * 0.25);
-    ctx.bezierCurveTo(-w * 1.02, -h * 1.45, w * 1.02, -h * 1.45, w, -h * 0.25);
-    ctx.bezierCurveTo(w * 1.05, h * 0.22, w * 0.5, h * 0.3, 0, h * 0.3);
-    ctx.bezierCurveTo(-w * 0.5, h * 0.3, -w * 1.05, h * 0.22, -w, -h * 0.25);
-    ctx.closePath();
-  }
-  ctx.strokeStyle = INK; ctx.lineWidth = lw;
-  ctx.stroke();
-
-  // cheeks
-  ctx.fillStyle = 'rgba(255,120,140,0.45)';
-  ellipse(ctx, w * 0.62, -h * 0.28, r * 0.17, r * 0.1); ctx.fill();
-  ellipse(ctx, -w * 0.22, -h * 0.28, r * 0.15, r * 0.09); ctx.fill();
-
-  // eyes: big, set to the facing side for a 3/4 look
-  const er = r * 0.36 * g[S.G_EYE];
-  const blink = o.mood === 'open' && ((o.t * 0.7 + c.id * 0.37) % 4.2) < 0.13;
-  const mood = blink ? 'closed' : o.mood;
-  eye(ctx, w * 0.02, -h * 0.72, er, o.lookX * o.facing, o.lookY, mood, lw * 0.9);
-  eye(ctx, w * 0.62, -h * 0.68, er * 0.92, o.lookX * o.facing, o.lookY, mood, lw * 0.9);
-
-  // mouth
-  ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.8;
-  ctx.beginPath();
-  if (o.mouth === 'chew') {
-    const open = (Math.sin(o.t * 14) + 1) * 0.5;
-    ctx.fillStyle = '#7a2230';
-    ellipse(ctx, w * 0.33, -h * 0.24, r * 0.13, r * (0.04 + 0.08 * open));
-    ctx.fill(); ctx.stroke();
-  } else if (o.mouth === 'scream') {
-    ctx.fillStyle = '#7a2230';
-    ellipse(ctx, w * 0.33, -h * 0.22, r * 0.12, r * 0.15);
-    ctx.fill(); ctx.stroke();
-  } else if (o.mouth === 'o') {
-    ellipse(ctx, w * 0.33, -h * 0.25, r * 0.07, r * 0.07); ctx.stroke();
+  const my = ey + E + 2, mx = Math.round(R * (D ? 0.3 : 0.25));
+  if (D) {
+    if (R >= 4 && mood !== 'closed') { dot(ctx, X, Y, f, ex1 - 1, my - 1, 1, 1, PINK_C); dot(ctx, X, Y, f, ex2 + E, my - 1, 1, 1, PINK_C); }
+    const chewOpen = o.mouth === 'chew' && Math.floor(o.t * 6) % 2 === 0;
+    if (o.mouth === 'scream' || chewOpen) {
+      dot(ctx, X, Y, f, mx - 1, my - 1, 4, o.mouth === 'scream' ? 4 : 3, INK_C);
+      dot(ctx, X, Y, f, mx, my, 2, o.mouth === 'scream' ? 2 : 1, MOUTH_C);
+    } else if (o.mouth === 'o') {
+      dot(ctx, X, Y, f, mx, my, 2, 2, INK_C);
+    } else if (R >= 4) {
+      dot(ctx, X, Y, f, mx - 1, my, 1, 1, INK_C); dot(ctx, X, Y, f, mx, my + 1, 2, 1, INK_C); dot(ctx, X, Y, f, mx + 2, my, 1, 1, INK_C);
+    } else dot(ctx, X, Y, f, mx, my, 2, 1, INK_C);
   } else {
-    ctx.arc(w * 0.33, -h * 0.34, r * 0.13, 0.2 * Math.PI, 0.8 * Math.PI);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function patternFill(ctx, pat, w, h, col, seed) {
-  if (pat === 1) { // spots
-    ctx.fillStyle = col.dark;
-    const spots = [[-0.55, -0.95, 0.2], [-0.2, -0.2, 0.16], [0.75, -1.05, 0.13], [-0.75, -0.35, 0.12], [0.35, -0.05, 0.1]];
-    for (const [x, y, s] of spots) { ellipse(ctx, x * w, y * h, s * w, s * w * 0.9); ctx.fill(); }
-  } else if (pat === 2) { // pale belly
-    ctx.fillStyle = col.light;
-    ellipse(ctx, w * 0.15, h * 0.05, w * 0.62, h * 0.42); ctx.fill();
-  } else if (pat === 3) { // stripes over the top
-    ctx.strokeStyle = col.dark; ctx.lineWidth = w * 0.16;
-    for (const x of [-0.5, 0, 0.5]) {
-      ctx.beginPath(); ctx.moveTo(x * w - w * 0.1, -h * 1.3); ctx.quadraticCurveTo(x * w + w * 0.12, -h * 0.85, x * w - w * 0.02, -h * 0.68); ctx.stroke();
+    // underbite with two little fangs pointing up
+    const open = o.mouth === 'open' || (o.mouth === 'chomp' && Math.floor(o.t * 8) % 2 === 0);
+    const mw = Math.max(3, Math.round(R * 0.7)), x0 = mx - Math.floor(mw / 2);
+    if (open) {
+      dot(ctx, X, Y, f, x0 - 1, my - 1, mw + 2, 4, INK_C);
+      dot(ctx, X, Y, f, x0, my, mw, 2, MOUTH_C);
+      dot(ctx, X, Y, f, x0, my + 1, 1, 1, WHITE_C); dot(ctx, X, Y, f, x0 + mw - 1, my + 1, 1, 1, WHITE_C);
+    } else {
+      dot(ctx, X, Y, f, x0, my + 1, mw, 1, INK_C);
+      if (R >= 4) { dot(ctx, X, Y, f, x0, my, 1, 1, WHITE_C); dot(ctx, X, Y, f, x0 + mw - 1, my, 1, 1, WHITE_C); }
     }
   }
 }
 
-function topAccessory(ctx, kind, r, h, lw, col, t) {
-  ctx.strokeStyle = INK; ctx.lineWidth = lw;
-  const top = -h * 1.08;
-  const sway = Math.sin(t * 1.7) * 0.12;
-  if (kind === 1) { // leaf sprout
-    ctx.beginPath(); ctx.moveTo(0, top + r * 0.1); ctx.quadraticCurveTo(r * 0.05, top - r * 0.3, r * (0.1 + sway), top - r * 0.48); ctx.stroke();
-    ctx.fillStyle = '#6cc04a';
-    ctx.save(); ctx.translate(r * (0.1 + sway), top - r * 0.48); ctx.rotate(-0.5 + sway);
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(r * 0.25, -r * 0.3, r * 0.55, -r * 0.05); ctx.quadraticCurveTo(r * 0.25, r * 0.15, 0, 0);
-    ctx.fill(); ctx.stroke(); ctx.restore();
-  } else if (kind === 2) { // single bobble antenna
-    const tx = r * (0.15 + sway * 1.5), ty = top - r * 0.62;
-    ctx.beginPath(); ctx.moveTo(-r * 0.05, top + r * 0.1); ctx.quadraticCurveTo(-r * 0.1, top - r * 0.35, tx, ty); ctx.stroke();
-    ctx.fillStyle = col.light;
-    ellipse(ctx, tx, ty, r * 0.17, r * 0.17); ctx.fill(); ctx.stroke();
-  } else if (kind === 3) { // two round ears
-    ctx.fillStyle = col.body;
-    for (const s of [-1, 1]) { ellipse(ctx, s * r * 0.55, top + r * 0.28, r * 0.24, r * 0.26); ctx.fill(); ctx.stroke(); }
-    ctx.fillStyle = 'rgba(255,140,160,0.6)';
-    for (const s of [-1, 1]) { ellipse(ctx, s * r * 0.55, top + r * 0.3, r * 0.11, r * 0.13); ctx.fill(); }
-  } else if (kind === 4) { // curly tuft
-    ctx.lineWidth = lw * 1.1;
-    ctx.beginPath();
-    ctx.moveTo(-r * 0.1, top + r * 0.12);
-    ctx.bezierCurveTo(-r * 0.2, top - r * 0.4, r * (0.45 + sway), top - r * 0.45, r * (0.25 + sway), top - r * 0.15);
-    ctx.bezierCurveTo(r * (0.1 + sway), top - r * 0.02, r * 0.02, top - r * 0.25, r * (0.18 + sway), top - r * 0.3);
-    ctx.stroke();
-  } else if (kind === 5) { // little flower
-    ctx.beginPath(); ctx.moveTo(0, top + r * 0.1); ctx.lineTo(r * sway, top - r * 0.38); ctx.stroke();
-    const fx = r * sway, fy = top - r * 0.48;
-    ctx.fillStyle = '#ffffff'; ctx.lineWidth = lw * 0.7;
-    for (let p = 0; p < 5; p++) { const a = p * TAU / 5 + t * 0.3; ellipse(ctx, fx + Math.cos(a) * r * 0.15, fy + Math.sin(a) * r * 0.15, r * 0.11, r * 0.11); ctx.fill(); ctx.stroke(); }
-    ctx.fillStyle = '#ffcd3c'; ellipse(ctx, fx, fy, r * 0.09, r * 0.09); ctx.fill(); ctx.stroke();
-  }
+export function headTop(c, u) { // pixels above the anchor where the head ends
+  return Math.round(-creatureR(c, u) * (c.s === 0 ? 2.1 : 2.6)) - 1;
 }
 
-// ---------------------------------------------------------------------------
-// grumble: a hunched, horned lump with heavy-lidded eyes and an underbite
-
-export function drawGrumble(ctx, c, o) {
-  const g = c.g;
-  const r = S.SPECIES[1].radius * g[S.G_SIZE] * (o.growth ?? 1);
-  const col = grumbleColors(g);
-  const lw = Math.max(1.8, r * 0.13);
-  const stride = o.moving ? Math.sin(o.walk * TAU) : 0;
-  const bob = o.moving ? Math.abs(Math.sin(o.walk * Math.PI)) * r * 0.1 : Math.sin(o.t * 1.5 + c.id) * r * 0.02;
-  const breathe = 1 + Math.sin(o.t * 1.5 + c.id) * 0.025;
-  const w = r * 1.05, h = r * 1.15 * breathe;
-  ctx.save();
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  shadow(ctx, r * 1.05);
-  ctx.scale(o.facing, 1);
-
-  // stubby legs
-  ctx.strokeStyle = INK; ctx.lineWidth = lw * 1.9;
-  for (const s of [-1, 1]) {
-    const lift = o.moving ? Math.max(0, stride * s) * r * 0.2 : 0;
-    ctx.beginPath(); ctx.moveTo(s * r * 0.45, -r * 0.35); ctx.lineTo(s * r * 0.48 + stride * s * r * 0.12, -lift - r * 0.02); ctx.stroke();
-  }
-  ctx.strokeStyle = col.dark; ctx.lineWidth = lw * 0.8;
-  for (const s of [-1, 1]) {
-    const lift = o.moving ? Math.max(0, stride * s) * r * 0.2 : 0;
-    ctx.beginPath(); ctx.moveTo(s * r * 0.45, -r * 0.35); ctx.lineTo(s * r * 0.48 + stride * s * r * 0.12, -lift - r * 0.02); ctx.stroke();
-  }
-
-  ctx.translate(0, -r * 0.3 - bob);
-  // horns
-  ctx.fillStyle = '#f3ead2'; ctx.strokeStyle = INK; ctx.lineWidth = lw;
-  for (const s of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(s * w * 0.25, -h * 1.12);
-    ctx.quadraticCurveTo(s * w * 0.42, -h * 1.62, s * w * 0.72, -h * 1.6);
-    ctx.quadraticCurveTo(s * w * 0.6, -h * 1.35, s * w * 0.62, -h * 1.02);
-    ctx.closePath(); ctx.fill(); ctx.stroke();
-  }
-  // body: wider at the shoulders, hunched
-  const bodyPath = () => {
-    ctx.beginPath();
-    ctx.moveTo(-w * 0.95, -h * 0.1);
-    ctx.bezierCurveTo(-w * 1.25, -h * 0.9, -w * 0.7, -h * 1.32, 0, -h * 1.28);
-    ctx.bezierCurveTo(w * 0.8, -h * 1.3, w * 1.3, -h * 0.85, w * 0.98, -h * 0.1);
-    ctx.bezierCurveTo(w * 0.85, h * 0.2, -w * 0.85, h * 0.2, -w * 0.95, -h * 0.1);
-    ctx.closePath();
-  };
-  bodyPath();
-  ctx.fillStyle = col.body; ctx.fill();
-  ctx.save(); ctx.clip();
-  // belly + a few scruffy tufts
-  ctx.fillStyle = col.light;
-  ellipse(ctx, w * 0.15, h * 0.02, w * 0.62, h * 0.4); ctx.fill();
-  ctx.strokeStyle = col.dark; ctx.lineWidth = lw * 0.8;
-  for (const [x, y] of [[-0.6, -0.7], [-0.35, -1.0], [-0.75, -0.35]]) {
-    ctx.beginPath(); ctx.moveTo(x * w, y * h); ctx.lineTo(x * w + r * 0.12, y * h + r * 0.1); ctx.lineTo(x * w + r * 0.2, y * h - r * 0.02); ctx.stroke();
-  }
-  if (g[S.G_PAT] === 1) { ctx.fillStyle = col.dark; for (const [x, y, s] of [[-0.5, -0.95, 0.16], [0.6, -1.0, 0.12], [-0.8, -0.5, 0.1]]) { ellipse(ctx, x * w, y * h, s * w, s * w); ctx.fill(); } }
-  if (g[S.G_PAT] === 3) { ctx.strokeStyle = col.dark; ctx.lineWidth = w * 0.13; for (const x of [-0.45, 0.05]) { ctx.beginPath(); ctx.moveTo(x * w, -h * 1.35); ctx.lineTo(x * w + w * 0.08, -h * 0.9); ctx.stroke(); } }
-  ctx.restore();
-  bodyPath();
-  ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke();
-
-  // eyes
-  const er = r * 0.3 * g[S.G_EYE];
-  ctx.__lid = col.dark;
-  const mood = o.mood;
-  eye(ctx, w * 0.05, -h * 0.78, er, o.lookX * o.facing, o.lookY, mood, lw * 0.9);
-  eye(ctx, w * 0.62, -h * 0.75, er * 0.9, o.lookX * o.facing, o.lookY, mood, lw * 0.9);
-  if (o.angry) {
-    ctx.strokeStyle = INK; ctx.lineWidth = lw * 1.2;
-    ctx.beginPath(); ctx.moveTo(-w * 0.25, -h * 1.12); ctx.lineTo(w * 0.32, -h * 0.98); ctx.lineTo(w * 0.9, -h * 1.08); ctx.stroke();
-  }
-
-  // underbite with two little fangs
-  const mo = o.mouth === 'chomp' ? (Math.sin(o.t * 18) + 1) * 0.5 : o.mouth === 'open' ? 0.7 : 0;
-  ctx.strokeStyle = INK; ctx.lineWidth = lw * 0.85;
-  const mx = w * 0.32, my = -h * 0.36;
-  if (mo > 0.05) {
-    ctx.fillStyle = '#5b1424';
-    ellipse(ctx, mx, my + r * 0.04, r * 0.3, r * (0.06 + 0.16 * mo)); ctx.fill(); ctx.stroke();
-  } else {
-    ctx.beginPath(); ctx.moveTo(mx - r * 0.32, my); ctx.quadraticCurveTo(mx, my + r * 0.1, mx + r * 0.32, my - r * 0.03); ctx.stroke();
-  }
-  ctx.fillStyle = '#ffffff'; ctx.lineWidth = lw * 0.6;
-  for (const s of [-1, 1]) {
-    const fx = mx + s * r * 0.17;
-    ctx.beginPath(); ctx.moveTo(fx - r * 0.06, my + r * 0.02); ctx.lineTo(fx, my - r * 0.14 - mo * r * 0.05); ctx.lineTo(fx + r * 0.06, my + r * 0.02); ctx.closePath(); ctx.fill(); ctx.stroke();
-  }
-  ctx.restore();
+const shadowCv = new Cache(64);
+export function drawShadow(ctx, X, Y, rx) {
+  rx = Math.max(1, Math.round(rx));
+  const cv = shadowCv.get(rx, () => {
+    const ry = Math.max(1, Math.round(rx * 0.36));
+    const p = new Pix(rx * 2 + 2, ry * 2 + 2, rx + 1, ry + 1);
+    p.ellipse(0, 0, rx, ry, rgb(20, 30, 40, 60));
+    return p.canvas();
+  });
+  stamp(ctx, cv, X, Y);
 }
 
 // ---------------------------------------------------------------------------
 // scenery
 
 const TREE_COLORS = [
-  ['#5dbb55', '#4a9e45'], // spring
-  ['#4fae4a', '#3f923c'], // summer
-  ['#e8963a', '#cf6f2c'], // autumn
-  ['#e9f0f4', '#cbd9e2'], // winter (snow-dusted)
+  [hex('#5dbb55'), hex('#3f9a45'), hex('#9ae07a')], // spring
+  [hex('#4fae4a'), hex('#36873b'), hex('#86d46a')], // summer
+  [hex('#e8963a'), hex('#c0622a'), hex('#ffc563')], // autumn
+  [hex('#eef4f8'), hex('#b9cad8'), hex('#ffffff')], // winter
 ];
+const BARK = hex('#8b5b38'), BARK_D = hex('#6a4129');
 
-// ---- sprite cache: static scenery is drawn once per look and zoom bucket
-let renderScale = 1;
-export function setRenderScale(sc) {
-  renderScale = Math.pow(2, Math.max(-1, Math.min(2, Math.ceil(Math.log2(sc)))));
-}
-const spriteCache = new Map();
-function cached(key, x0, y0, x1, y1, draw) {
-  const k = `${key}|${renderScale}`;
-  let c = spriteCache.get(k);
-  if (!c) {
-    c = document.createElement('canvas');
-    c.width = Math.ceil((x1 - x0) * renderScale); c.height = Math.ceil((y1 - y0) * renderScale);
-    const cx = c.getContext('2d');
-    cx.setTransform(renderScale, 0, 0, renderScale, -x0 * renderScale, -y0 * renderScale);
-    draw(cx);
-    c.box = [x0, y0, x1 - x0, y1 - y0];
-    spriteCache.set(k, c);
-    if (spriteCache.size > 320) spriteCache.delete(spriteCache.keys().next().value);
-  }
-  return c;
-}
-function stamp(ctx, c) { ctx.drawImage(c, c.box[0], c.box[1], c.box[2], c.box[3]); }
-
-export function drawTree(ctx, tr, season, t) {
-  const kq = Math.round(tr.k * 5) / 5;
-  const c = cached(`tree|${tr.kind}|${kq}|${season}`, -50, -96, 50, 14, cx => drawTreeRaw(cx, tr.kind, kq, season));
-  if (renderScale < 1) { stamp(ctx, c); return; } // too small to see the breeze
-  const sway = Math.sin(t * 0.8 + tr.x * 0.01) * 0.02;
-  ctx.transform(1, 0, sway, 1, 0, 0);
-  stamp(ctx, c);
-  ctx.transform(1, 0, -sway, 1, 0, 0);
-}
-export function drawRock(ctx, rk, season) {
-  const kq = Math.round(rk.k * 5) / 5;
-  stamp(ctx, cached(`rock|${rk.big}|${kq}|${season === 3}`, -36, -50, 36, 10, cx => drawRockRaw(cx, { big: rk.big, k: kq }, season)));
+function shaded(p, base, dark, light) {
+  p.rim(0, 1, dark, base); p.rim(1, 0, dark, base);
+  p.rim(0, -1, light, base);
 }
 
-function drawTreeRaw(ctx, kind, k, season) {
-  const tr = { kind, k };
-  const sway = 0;
-  const s = 0.72 + tr.k * 0.36;
-  ctx.save();
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.strokeStyle = INK; ctx.lineWidth = 2.6;
-  ctx.fillStyle = 'rgba(20,40,20,0.2)';
-  ellipse(ctx, 0, 0, 20 * s, 7 * s); ctx.fill();
-  if (tr.kind === 1) {
-    // pine: stacked wobbly triangles
-    ctx.fillStyle = '#8a5a35';
-    ctx.beginPath(); ctx.rect(-4 * s, -14 * s, 8 * s, 14 * s); ctx.fill(); ctx.stroke();
-    const greens = season === 3 ? ['#3f7f5a', '#356f4e'] : season === 2 ? ['#3c8a52', '#2f7444'] : ['#3d9a5a', '#2f8049'];
-    for (let i = 0; i < 3; i++) {
-      const by = -12 * s - i * 15 * s, hw = (22 - i * 5) * s, ht = 24 * s;
-      ctx.beginPath();
-      ctx.moveTo(-hw, by);
-      ctx.quadraticCurveTo(0, by + 5 * s, hw, by);
-      ctx.lineTo(sway * (i + 1) * 0.5, by - ht);
-      ctx.closePath();
-      ctx.fillStyle = greens[i % 2]; ctx.fill(); ctx.stroke();
-      if (season === 3) {
-        ctx.fillStyle = '#f6fbff';
-        ctx.beginPath();
-        ctx.moveTo(sway * (i + 1) * 0.5, by - ht);
-        ctx.lineTo(-hw * 0.45, by - ht * 0.52);
-        ctx.quadraticCurveTo(0, by - ht * 0.38, hw * 0.45, by - ht * 0.52);
-        ctx.closePath(); ctx.fill(); ctx.stroke();
+export function tree(tr, season, u) {
+  const kq = Math.round(tr.k * 4) / 4;
+  return sprites.get(`tree|${tr.kind}|${kq}|${season}|${u}`, () => {
+    const s = (0.72 + kq * 0.36) * u;
+    const W = Math.ceil(54 * s) * 2 + 4, H = Math.ceil(100 * s) + 6;
+    const p = new Pix(W, H, W / 2, H - 3);
+    if (tr.kind === 1) {
+      p.rect(Math.round(-3.5 * s), Math.round(-14 * s), Math.max(1, Math.round(7 * s)), Math.round(14 * s) + 1, BARK);
+      const greens = season === 3 ? [hex('#3f7f5a'), hex('#2d6446'), hex('#5e9c78')] : season === 2 ? [hex('#3c8a52'), hex('#2a6a3d'), hex('#5aa86c')] : [hex('#3d9a5a'), hex('#2b7a44'), hex('#5dbb76')];
+      for (let i = 0; i < 3; i++) {
+        const by = (-12 - i * 15) * s, hw = (22 - i * 5) * s, ht = 24 * s;
+        p.poly([[-hw, by], [hw, by], [0, by - ht]], greens[0]);
+        if (season === 3) p.poly([[0, by - ht], [-hw * 0.45, by - ht * 0.5], [hw * 0.45, by - ht * 0.5]], WHITE);
+      }
+      shaded(p, greens[0], greens[1], greens[2]);
+    } else {
+      p.poly([[-5 * s, 1], [-4 * s, -26 * s], [4 * s, -26 * s], [5 * s, 1]], BARK);
+      p.rim(1, 0, BARK_D, BARK);
+      const [c1, c2, c3] = TREE_COLORS[season];
+      const blobs = [[0, -44, 22], [-15, -34, 15], [15, -35, 16], [-6, -58, 14], [9, -55, 13]];
+      for (const [x, y, r] of blobs) p.ellipse(x * s, y * s, r * s, r * s * 0.95, c1);
+      shaded(p, c1, c2, c3);
+      // a few leafy flecks
+      for (const [x, y] of [[-8, -46], [7, -38], [2, -58], [-15, -33], [12, -50]]) {
+        const X = Math.round(x * s), Y = Math.round(y * s);
+        if (p.get(X, Y) === c1 && p.get(X + 1, Y + 1) === c1) { p.set(X, Y, c2); p.set(X + 1, Y + 1, c2); }
+      }
+      if (season === 0 && kq > 0.5) for (const [x, y] of [[-10, -50], [8, -42], [12, -60], [-16, -36], [0, -64]]) {
+        const X = Math.round(x * s), Y = Math.round(y * s);
+        if (p.solid(X, Y)) p.set(X, Y, hex('#ffb3cf'));
       }
     }
-  } else {
-    // round leafy tree: trunk + union of blobs
-    ctx.fillStyle = '#8b5b38';
-    ctx.beginPath();
-    ctx.moveTo(-5 * s, 0); ctx.lineTo(-4 * s, -26 * s); ctx.lineTo(4 * s, -26 * s); ctx.lineTo(5 * s, 0); ctx.closePath();
-    ctx.fill(); ctx.stroke();
-    const [c1, c2] = TREE_COLORS[season];
-    const blobs = [[0, -44, 22], [-15, -34, 15], [15, -35, 16], [-6, -58, 14], [9, -55, 13]];
-    ctx.lineWidth = 5.2;
-    for (const [x, y, r] of blobs) { ellipse(ctx, x * s + sway * (-y / 50), y * s, r * s, r * s * 0.95); ctx.stroke(); }
-    ctx.fillStyle = c1;
-    for (const [x, y, r] of blobs) { ellipse(ctx, x * s + sway * (-y / 50), y * s, r * s, r * s * 0.95); ctx.fill(); }
-    // little squiggle marks like leaves
-    ctx.strokeStyle = c2; ctx.lineWidth = 2.2;
-    for (const [x, y] of [[-8, -46], [7, -38], [2, -58], [-15, -33]]) {
-      const px = x * s + sway * 0.6, py = y * s;
-      ctx.beginPath(); ctx.moveTo(px - 4, py - 2); ctx.lineTo(px - 1, py + 2); ctx.lineTo(px + 2, py - 2); ctx.lineTo(px + 5, py + 2); ctx.stroke();
-    }
-    if (season === 3) {
-      ctx.fillStyle = '#ffffff';
-      ellipse(ctx, sway * 0.9, -62 * s, 13 * s, 6 * s); ctx.fill();
-    }
-    if (season === 0 && tr.k > 0.55) {
-      ctx.fillStyle = '#ffb3cf'; ctx.strokeStyle = INK; ctx.lineWidth = 1.4;
-      for (const [x, y] of [[-10, -50], [8, -42], [12, -60], [-16, -36]]) { ellipse(ctx, x * s + sway * 0.7, y * s, 3, 3); ctx.fill(); ctx.stroke(); }
-    }
-  }
-  ctx.restore();
+    p.outline();
+    return p.canvas();
+  });
 }
 
-function drawRockRaw(ctx, rk, season) {
-  const s = rk.big ? 1.1 + rk.k * 0.6 : 0.6 + rk.k * 0.4;
-  ctx.save();
-  ctx.lineJoin = 'round';
-  ctx.fillStyle = 'rgba(20,30,20,0.18)';
-  ellipse(ctx, 0, 0, 15 * s, 5 * s); ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-14 * s, 0);
-  ctx.quadraticCurveTo(-16 * s, -12 * s, -6 * s, -17 * s);
-  ctx.quadraticCurveTo(4 * s, -22 * s, 12 * s, -12 * s);
-  ctx.quadraticCurveTo(17 * s, -4 * s, 13 * s, 0);
-  ctx.closePath();
-  ctx.fillStyle = '#a9a7a2'; ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = 2.4; ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ellipse(ctx, -4 * s, -13 * s, 4 * s, 2 * s); ctx.fill();
-  if (season === 3) {
-    ctx.fillStyle = '#f7fbff';
-    ctx.beginPath();
-    ctx.moveTo(-10 * s, -13 * s); ctx.quadraticCurveTo(-4 * s, -21 * s, 8 * s, -15 * s); ctx.quadraticCurveTo(0, -12 * s, -10 * s, -13 * s);
-    ctx.fill(); ctx.lineWidth = 1.6; ctx.stroke();
-  }
-  ctx.restore();
+const ROCK = hex('#a9a7a2'), ROCK_D = hex('#7f7d79'), ROCK_L = hex('#cfcdc7');
+export function rock(rk, season, u) {
+  const kq = Math.round(rk.k * 4) / 4;
+  return sprites.get(`rock|${rk.big}|${kq}|${season === 3}|${u}`, () => {
+    const s = (rk.big ? 1.1 + kq * 0.6 : 0.6 + kq * 0.4) * u;
+    const W = Math.ceil(20 * s) * 2 + 4, H = Math.ceil(24 * s) + 5;
+    const p = new Pix(W, H, W / 2, H - 2);
+    p.fill(-16 * s, -22 * s, 16 * s, 0, (x, y) => y <= 0.5 && ((x + s) / (15 * s)) ** 2 + ((y + 8 * s) / (12 * s)) ** 2 <= 1 || ((x - 4 * s) / (8 * s)) ** 2 + ((y + 15 * s) / (7 * s)) ** 2 <= 1, ROCK);
+    shaded(p, ROCK, ROCK_D, ROCK_L);
+    if (season === 3) p.paint((x, y) => !p.solid(x, y - 2) || !p.solid(x, y - 1), WHITE);
+    p.outline();
+    return p.canvas();
+  });
 }
 
-export function drawBush(ctx, b, season, t, shake) {
-  ctx.save();
-  ctx.lineJoin = 'round';
-  const sx = shake ? Math.sin(t * 40) * 1.2 : 0;
-  ctx.translate(sx, 0);
-  stamp(ctx, cached(`bush|${season}`, -26, -34, 26, 10, cx => {
-    cx.lineJoin = 'round';
-    cx.fillStyle = 'rgba(20,30,20,0.18)';
-    ellipse(cx, 0, 0, 19, 6); cx.fill();
-    const leaf = ['#4fb24c', '#47a446', '#8a9a3c', '#6b8a6a'][season];
-    const blobs = [[-9, -10, 10], [9, -10, 10], [0, -17, 11]];
-    cx.strokeStyle = INK; cx.lineWidth = 5;
-    for (const [x, y, r] of blobs) { ellipse(cx, x, y, r, r * 0.92); cx.stroke(); }
-    cx.fillStyle = leaf;
-    for (const [x, y, r] of blobs) { ellipse(cx, x, y, r, r * 0.92); cx.fill(); }
-    if (season === 3) {
-      cx.fillStyle = '#f5fafd';
-      ellipse(cx, 0, -25, 9, 4); cx.fill();
+const BUSH = [hex('#4fb24c'), hex('#47a446'), hex('#8a9a3c'), hex('#6b8a6a')];
+export function bush(season, u) {
+  return sprites.get(`bush|${season}|${u}`, () => {
+    const s = u;
+    const W = Math.ceil(24 * s) * 2 + 4, H = Math.ceil(30 * s) + 5;
+    const p = new Pix(W, H, W / 2, H - 2);
+    const c1 = BUSH[season];
+    for (const [x, y, r] of [[-9, -10, 10], [9, -10, 10], [0, -17, 11]]) p.ellipse(x * s, y * s, r * s, r * s * 0.92, c1);
+    shaded(p, c1, shade(c1, 0.75), shade(c1, 1.25));
+    if (season === 3) p.paint((x, y) => !p.solid(x, y - 1), WHITE);
+    p.outline();
+    return p.canvas();
+  });
+}
+const BERRY_SPOTS = [[-9, -12], [7, -8], [1, -20], [-3, -6], [11, -16], [-12, -18]];
+export function drawBush(ctx, b, X, Y, season, u, shake) {
+  stamp(ctx, bush(season, u), X + (shake ? 1 : 0), Y);
+  if (u < 0.2) return;
+  const c = season === 2 ? css(PLUM) : css(BERRY);
+  for (let i = 0; i < b.b && i < BERRY_SPOTS.length; i++) {
+    const x = Math.round(X + BERRY_SPOTS[i][0] * u) + (shake ? 1 : 0), y = Math.round(Y + BERRY_SPOTS[i][1] * u);
+    ctx.fillStyle = INK_C; ctx.fillRect(x - 1, y - 1, 3, 3);
+    ctx.fillStyle = c; ctx.fillRect(x, y, 2, 2);
+    ctx.fillStyle = '#ffd0d8'; ctx.fillRect(x, y, 1, 1);
+  }
+}
+
+export function shrub(season, u) {
+  return sprites.get(`shrub|${season}|${u}`, () => {
+    const s = u, W = Math.ceil(16 * s) * 2 + 4, H = Math.ceil(18 * s) + 5;
+    const p = new Pix(W, H, W / 2, H - 2);
+    const c1 = season === 3 ? hex('#c9c2b0') : hex('#a39654');
+    for (const [x, y, r] of [[-6, -6, 7], [6, -6, 7], [0, -11, 7]]) p.ellipse(x * s, y * s, r * s, r * s * 0.85, c1);
+    shaded(p, c1, shade(c1, 0.75), shade(c1, 1.2));
+    p.outline();
+    return p.canvas();
+  });
+}
+
+export function mushroom(u) {
+  return sprites.get(`mush|${u}`, () => {
+    const s = u, W = Math.ceil(22 * s) * 2 + 4, H = Math.ceil(24 * s) + 5;
+    const p = new Pix(W, H, W / 2, H - 2);
+    const cap = hex('#a77be8');
+    for (const [x, k] of [[0, 1], [9, 0.7]]) {
+      p.rect(Math.round((x - 2) * s), Math.round(-9 * k * s), Math.max(1, Math.round(4 * k * s)), Math.round(9 * k * s) + 1, hex('#f4ecdf'));
+      p.fill((x - 9 * k) * s, -20 * k * s, (x + 9 * k) * s, -7 * k * s, (px, py) => ((px - x * s) / (9 * k * s)) ** 2 + ((py + 8 * k * s) / (9 * k * s)) ** 2 <= 1 && py <= -7 * k * s + 0.5, cap);
     }
-  }));
-  ctx.strokeStyle = INK;
-  // berries
-  const spots = [[-9, -12], [7, -8], [1, -20], [-3, -6], [11, -16], [-12, -18]];
-  ctx.lineWidth = 1.6;
-  for (let i = 0; i < b.b && i < spots.length; i++) {
-    ctx.fillStyle = season === 2 ? '#7c3bd1' : '#e8344e';
-    ellipse(ctx, spots[i][0], spots[i][1], 3.6, 3.6); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ellipse(ctx, spots[i][0] - 1.1, spots[i][1] - 1.2, 1, 1); ctx.fill();
-  }
-  ctx.restore();
+    p.paint((x, y) => (x * 7 + y * 3) % 5 === 0, WHITE, cap);
+    p.outline();
+    return p.canvas();
+  });
 }
 
-export function drawMushroom(ctx, m, t, glow) {
-  ctx.save();
-  ctx.lineJoin = 'round';
-  if (glow > 0) {
-    ctx.globalCompositeOperation = 'lighter';
-    const gr = ctx.createRadialGradient(0, -8, 1, 0, -8, 26);
-    gr.addColorStop(0, `rgba(190,140,255,${0.45 * glow})`); gr.addColorStop(1, 'rgba(190,140,255,0)');
-    ctx.fillStyle = gr; ctx.fillRect(-26, -34, 52, 52);
-    ctx.globalCompositeOperation = 'source-over';
-  }
-  ctx.strokeStyle = INK; ctx.lineWidth = 2;
-  for (const [x, s] of [[0, 1], [9, 0.7]]) {
-    ctx.fillStyle = '#f4ecdf';
-    ctx.beginPath(); ctx.rect(x - 2.5 * s, -9 * s, 5 * s, 9 * s); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#a77be8';
-    ctx.beginPath(); ctx.moveTo(x - 9 * s, -8 * s); ctx.quadraticCurveTo(x, -22 * s, x + 9 * s, -8 * s); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#ffffff';
-    ellipse(ctx, x - 3 * s, -12 * s, 1.6 * s, 1.6 * s); ctx.fill();
-    ellipse(ctx, x + 3 * s, -14 * s, 1.3 * s, 1.3 * s); ctx.fill();
-  }
-  ctx.restore();
-}
-
-export function drawReeds(ctx, r, t) {
-  ctx.save();
-  ctx.strokeStyle = INK; ctx.lineCap = 'round';
+export function drawReeds(ctx, X, Y, t, u, seed) {
+  if (u < 0.2) return;
   for (let i = 0; i < 3; i++) {
-    const x = (i - 1) * 5, sway = Math.sin(t * 1.3 + r.x * 0.05 + i) * 2;
-    ctx.lineWidth = 1.8;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.quadraticCurveTo(x, -10, x + sway, -20 - i * 3); ctx.stroke();
+    const x = X + Math.round((i - 1) * 5 * u);
+    const hgt = Math.round((20 + i * 3) * u);
+    const sway = Math.round(Math.sin(t * 1.3 + seed + i));
+    ctx.fillStyle = INK_C;
+    ctx.fillRect(x, Y - hgt + 2, 1, hgt - 2);
+    ctx.fillRect(x + sway - 1, Y - hgt - 3, 3, 5);
     ctx.fillStyle = '#8a5a35';
-    ellipse(ctx, x + sway, -21 - i * 3, 2.2, 4.5); ctx.fill(); ctx.stroke();
+    ctx.fillRect(x + sway, Y - hgt - 2, 1, 3);
   }
-  ctx.restore();
 }
 
-export function drawGrave(ctx, gv, alpha) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.lineJoin = 'round';
-  ctx.fillStyle = 'rgba(20,30,20,0.18)';
-  ellipse(ctx, 0, 0, 10, 3.5); ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(-7, 0); ctx.lineTo(-7, -11);
-  ctx.quadraticCurveTo(-7, -19, 0, -19); ctx.quadraticCurveTo(7, -19, 7, -11);
-  ctx.lineTo(7, 0); ctx.closePath();
-  ctx.fillStyle = '#b9bcc2'; ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = 2; ctx.stroke();
-  ctx.strokeStyle = 'rgba(40,40,40,0.6)'; ctx.lineWidth = 1.3;
-  ctx.beginPath(); ctx.moveTo(-3, -10); ctx.lineTo(3, -10); ctx.moveTo(0, -14); ctx.lineTo(0, -5); ctx.stroke();
-  // a tiny dot in the creature's colour so you can tell whose it was
-  ctx.fillStyle = gv.s === 0 ? hsl(gv.h, 78, 64) : hsl(gv.h, 46, 44);
-  ellipse(ctx, 0, -3, 2, 1.6); ctx.fill();
-  ctx.restore();
+export function grave(gv, u) {
+  return sprites.get(`grave|${gv.s}|${Math.round(gv.h / 10)}|${u}`, () => {
+    const s = u, W = Math.ceil(10 * s) * 2 + 4, H = Math.ceil(20 * s) + 5;
+    const p = new Pix(W, H, W / 2, H - 2);
+    const stone = hex('#b9bcc2');
+    p.fill(-7 * s, -19 * s, 7 * s, 0, (x, y) => y > -11 * s || (x * x + (y + 11 * s) ** 2) <= (7 * s) ** 2, stone);
+    p.rim(1, 0, hex('#8f939b'), stone);
+    if (s * 10 >= 4) {
+      const cy = Math.round(-11 * s);
+      p.set(0, cy - 1, hex('#6c6f76')); p.set(0, cy, hex('#6c6f76')); p.set(-1, cy, hex('#6c6f76')); p.set(1, cy, hex('#6c6f76')); p.set(0, cy + 1, hex('#6c6f76'));
+      p.set(0, -2, gv.s === 0 ? hsl(gv.h, 78, 64) : hsl(gv.h, 46, 44));
+    }
+    p.outline();
+    return p.canvas();
+  });
 }
 
-export function drawGhost(ctx, k, s) {
-  // k: 0..1 progress
-  ctx.save();
-  ctx.globalAlpha = Math.max(0, 1 - k) * 0.9;
-  ctx.translate(Math.sin(k * 9) * 4, -k * 46);
-  ctx.scale(s, s);
-  ctx.beginPath();
-  ctx.moveTo(-8, 0);
-  ctx.lineTo(-8, -10); ctx.quadraticCurveTo(-8, -20, 0, -20); ctx.quadraticCurveTo(8, -20, 8, -10);
-  ctx.lineTo(8, 0); ctx.lineTo(5, -3); ctx.lineTo(2, 0); ctx.lineTo(-1, -3); ctx.lineTo(-4, 0); ctx.lineTo(-6, -3); ctx.closePath();
-  ctx.fillStyle = '#ffffff'; ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = 1.8; ctx.lineJoin = 'round'; ctx.stroke();
-  ctx.fillStyle = INK;
-  ellipse(ctx, -3, -12, 1.4, 2); ctx.fill(); ellipse(ctx, 3, -12, 1.4, 2); ctx.fill();
-  ctx.restore();
+// ---------------------------------------------------------------------------
+// little effects
+
+function fromRows(rows, colors, outline = true) {
+  const h = rows.length, w = rows[0].length;
+  const p = new Pix(w + 2, h + 2, Math.floor((w + 2) / 2), Math.floor((h + 2) / 2));
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    const ch = rows[j][i];
+    if (colors[ch] !== undefined) p.d[(j + 1) * p.w + i + 1] = colors[ch];
+  }
+  if (outline) p.outline();
+  return p.canvas();
 }
 
-export function heart(ctx, x, y, s, fill) {
-  ctx.save();
-  ctx.translate(x, y); ctx.scale(s, s);
-  ctx.beginPath();
-  ctx.moveTo(0, 3);
-  ctx.bezierCurveTo(-7, -2, -5, -9, 0, -5);
-  ctx.bezierCurveTo(5, -9, 7, -2, 0, 3);
-  ctx.closePath();
-  ctx.fillStyle = fill || '#ff5a7a'; ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = 1.5 / s * 1.2; ctx.lineJoin = 'round'; ctx.stroke();
-  ctx.restore();
+const FX = {};
+export function fx(name) {
+  if (FX[name]) return FX[name];
+  const R = hex('#ff5a7a'), L = hex('#ffc0cc'), Y = YELLOW, W = WHITE, B = hex('#8fd3ff'), K = INK, G = hex('#e8344e');
+  const defs = {
+    heart: [['.##.##.', '#l#####', '#######', '.#####.', '..###..', '...#...'], { '#': R, l: L }],
+    star: [['..#..', '.###.', '#####', '.#.#.'], { '#': Y }],
+    sparkle: [['.#.', '###', '.#.'], { '#': W }, false],
+    z: [['###', '..#', '.#.', '###'], { '#': W }],
+    drop: [['.#.', '###', '###', '.#.'], { '#': B }],
+    anger: [['#.#', '...', '#.#'], { '#': G }, false],
+    ghost: [['.####.', '######', '#k##k#', '#k##k#', '######', '######', '#.##.#'], { '#': W, k: K }],
+    crumb: [['##', '##'], { '#': BERRY }, false],
+  };
+  const [rows, colors, outline] = defs[name];
+  return (FX[name] = fromRows(rows, colors, outline !== false));
 }
+
+const puffs = new Cache(16);
+export function puff(r) {
+  r = Math.max(1, Math.min(7, Math.round(r)));
+  return puffs.get(r, () => {
+    const p = new Pix(r * 2 + 3, r * 2 + 3, r + 1, r + 1);
+    p.ellipse(0, 0, r, r, WHITE);
+    p.rim(0, 1, hex('#d8dde6'), WHITE);
+    p.outline();
+    return p.canvas();
+  });
+}
+
+export { stamp };

@@ -3,14 +3,7 @@ import * as T from './terrain.js';
 import * as SP from './sprites.js';
 import * as UI from './ui.js';
 import { EditFeed, sendEdit } from './edits.js';
-
-// older Safari has no roundRect
-if (!CanvasRenderingContext2D.prototype.roundRect) {
-  CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
-    this.moveTo(x + r, y); this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r);
-    this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r); this.closePath();
-  };
-}
+import { PX, textSprite, textWidth, INK, INK_CSS as SP_INK, hex } from './pixel.js';
 
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
@@ -42,6 +35,8 @@ const app = {
   moves: new Map(), // id -> { x, y, until } drop spot shown while the move travels
   hurtFlash: new Map(), // id -> until (ms)
   lastInput: 0,
+  zoomedAt: 0,
+  view: { L: 0, k: 3, u: 1 / PX },
 };
 app.feed = new EditFeed(e => onEditArrived(e));
 
@@ -159,12 +154,14 @@ function chooseStartView() {
   director.next(true);
 }
 
+// a comfortable zoom: an art pixel is 3 CSS pixels on big screens, 2 on phones
 function defaultZoom() {
-  const short = Math.min(app.W, app.H);
-  return Math.max(minZoom(), Math.min(2.2, Math.max(0.95, short / 560)));
+  const cssPerArt = Math.min(app.W, app.H) >= 700 ? 3 : 2;
+  return snapZoom(cssPerArt / PX);
 }
-function minZoom() { return Math.min(app.W / (S.WORLD_W + 200), app.H / (S.WORLD_H + 200)); }
-function setZoom(z) { app.cam.z = Math.max(minZoom(), Math.min(4, z)); }
+function minZoom() { return 0.8 * Math.min(app.W / S.WORLD_W, app.H / S.WORLD_H); }
+function maxZoom() { return 4; }
+function setZoom(z) { app.cam.z = Math.max(minZoom(), Math.min(maxZoom(), z)); }
 function clampCam() {
   const hw = app.W / 2 / app.cam.z, hh = app.H / 2 / app.cam.z;
   const m = 100;
@@ -173,9 +170,8 @@ function clampCam() {
 }
 
 function resize() {
-  app.dpr = Math.min(window.devicePixelRatio || 1, app.low ? 1 : 1.5);
+  app.dpr = window.devicePixelRatio || 1;
   app.W = window.innerWidth; app.H = window.innerHeight;
-  canvas.width = Math.round(app.W * app.dpr); canvas.height = Math.round(app.H * app.dpr);
   if (app.w) { setZoom(app.cam.z); clampCam(); }
 }
 window.addEventListener('resize', resize);
@@ -293,6 +289,7 @@ function handleFx(fx, visible) {
 
 function addParticle(p) {
   p.t0 = performance.now() / 1000;
+  if (typeof p.color === 'string') p.color = hex(p.color);
   if (p.x === undefined) { p.x = 0; p.y = 0; }
   p.vx = p.vx || 0; p.vy = p.vy || 0;
   app.particles.push(p);
@@ -311,26 +308,27 @@ function byId(id) {
 
 // ---------------------------------------------------------------------------
 // render
+//
+// The world is painted into a small art buffer (the canvas itself), one
+// buffer pixel per art pixel, and the browser blows it up with hard pixel
+// edges. At the closest zoom levels an art pixel is PX world units; further
+// out each level doubles that. The buffer always starts on a whole art pixel
+// and the leftover fraction is a CSS shift, so panning stays smooth while the
+// pixels stay crisp.
 
-// Quality adapts to the device: if drawing a frame takes too long we switch to
-// a lighter mode (1x pixels, 30 fps, fewer effects); if it gets cheap again we
-// switch back.
-// phones and small machines start light and only go fancy if they prove fast
-app.low = matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 4;
-const perf = app.perf = { cost: 6, gap: 16, slowFor: 0, fastFor: 0, frame: 0 };
+// Quality adapts to the device: if frames take too long we drop to 30 fps and
+// skip the little extras; if it gets cheap again we switch back.
+app.low = (navigator.hardwareConcurrency || 8) <= 2 || (navigator.deviceMemory || 8) <= 2;
+const perf = app.perf = { cost: 4, gap: 16, slowFor: 0, fastFor: 0, frame: 0 };
 const forcedQuality = new URLSearchParams(location.search).get('quality'); // 'high' | 'low' for testing
 if (forcedQuality) app.low = forcedQuality === 'low';
 function adaptQuality(cost, dt) {
   perf.cost += (cost - perf.cost) * 0.05;
-  perf.gap += (dt * 1000 - perf.gap) * 0.05; // time between frames we draw (includes painting)
+  perf.gap += (dt * 1000 - perf.gap) * 0.05;
   if (forcedQuality || document.hidden) return;
-  if (!app.low && (perf.cost > 10 || perf.gap > 24)) perf.slowFor += dt; else perf.slowFor = 0;
+  if (!app.low && (perf.cost > 10 || perf.gap > 26)) perf.slowFor += dt; else perf.slowFor = 0;
   if (app.low && perf.cost < 4) perf.fastFor += dt; else perf.fastFor = 0;
-  if (perf.slowFor > 1.5 || perf.fastFor > 30) {
-    app.low = !app.low;
-    perf.slowFor = perf.fastFor = 0;
-    resize();
-  }
+  if (perf.slowFor > 2 || perf.fastFor > 30) { app.low = !app.low; perf.slowFor = perf.fastFor = 0; }
 }
 
 function frame(now) {
@@ -339,18 +337,33 @@ function frame(now) {
   const t0 = performance.now();
   if (app.live) stepLive();
   if (!app.w) return;
-  // in light mode draw every other frame
   perf.frame++;
   if (app.low && perf.frame % 2 && !document.hidden) return;
   app.lastFrame = now;
   updateCamera(dt);
   render(now / 1000, dt);
-  T.pumpTiles(app.low ? 3 : 6);
+  T.pumpTiles(app.low ? 4 : 7);
   adaptQuality(performance.now() - t0, dt);
 }
 
+// zoom: s = device pixels per art pixel at level 0. Crisp zooms are whole
+// numbers of device pixels per art pixel (or a power-of-two level further out).
+function viewParams(z = app.cam.z) {
+  const s = z * app.dpr * PX;
+  let L = 0;
+  while (L < T.MAX_LEVEL && s * (1 << L) < 0.999) L++;
+  return { L, k: s * (1 << L), u: 1 / (PX << L) };
+}
+function snapZoom(z) {
+  const s = z * app.dpr * PX;
+  const toZ = v => v / (app.dpr * PX);
+  let v = s >= 1 ? Math.max(1, Math.round(s)) : Math.pow(2, Math.round(Math.log2(s)));
+  while (toZ(v) < minZoom() - 1e-9) v = v >= 1 ? v + 1 : v * 2;
+  while (toZ(v) > maxZoom() + 1e-9) v = v > 1 ? v - 1 : v / 2;
+  return toZ(v);
+}
+
 function updateCamera(dt) {
-  // keyboard panning
   const k = app.keys;
   const pan = 520 / app.cam.z * dt;
   let mx = 0, my = 0;
@@ -359,7 +372,7 @@ function updateCamera(dt) {
   if (k.has('ArrowUp') || k.has('w')) my -= 1;
   if (k.has('ArrowDown') || k.has('s')) my += 1;
   if (mx || my) { app.cam.x += mx * pan; app.cam.y += my * pan; app.following = false; app.camTarget = null; touched(); }
-  director.update();
+  director.update(dt);
   if (app.following && app.selected >= 0) {
     const p = renderPos(byId(app.selected), alphaNow());
     // keep the creature visible above the card on narrow screens
@@ -373,9 +386,15 @@ function updateCamera(dt) {
     app.cam.y += (app.camTarget.y - app.cam.y) * ease;
     if (app.camTarget.z) {
       app.cam.z += (app.camTarget.z - app.cam.z) * ease;
-      if (Math.abs(app.camTarget.z - app.cam.z) < 0.01) app.camTarget.z = undefined;
+      if (Math.abs(app.camTarget.z - app.cam.z) < 0.003) { app.cam.z = app.camTarget.z; app.camTarget.z = undefined; }
     }
     if (!app.following && Math.abs(app.camTarget.x - app.cam.x) < 1 && Math.abs(app.camTarget.y - app.cam.y) < 1) app.camTarget = null;
+  }
+  // settle on a crisp zoom once nobody is zooming
+  if (performance.now() - app.zoomedAt > 250 && pointers.size < 2 && !(app.camTarget && app.camTarget.z)) {
+    const zs = snapZoom(app.cam.z);
+    if (Math.abs(zs - app.cam.z) < 0.002) app.cam.z = zs;
+    else app.cam.z += (zs - app.cam.z) * (1 - Math.pow(0.0001, dt));
   }
   clampCam();
 }
@@ -402,42 +421,51 @@ export function localDaylight(date = new Date()) {
   return { day, dusk: Math.min(1, dusk), h };
 }
 
+let lastCss = '';
 function render(t, dt) {
   const { W, H, dpr, cam } = app;
   const w = app.w;
   const season = seasonNow();
   const a = alphaNow();
+  const { L, k, u } = viewParams();
+  app.view = { L, k, u };
+  // size the art buffer and place it on screen
+  const bw = Math.ceil(W * dpr / k) + 2, bh = Math.ceil(H * dpr / k) + 2;
+  if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
+  const leftArt = (cam.x - W / 2 / cam.z) * u, topArt = (cam.y - H / 2 / cam.z) * u;
+  const ox = Math.floor(leftArt), oy = Math.floor(topArt);
+  const cssSize = `${bw * k / dpr}px|${bh * k / dpr}px`;
+  if (cssSize !== lastCss) { lastCss = cssSize; canvas.style.width = `${bw * k / dpr}px`; canvas.style.height = `${bh * k / dpr}px`; }
+  canvas.style.transform = `translate(${(-(leftArt - ox) * k / dpr).toFixed(2)}px,${(-(topArt - oy) * k / dpr).toFixed(2)}px)`;
+
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const deep = T.palette(season).deep;
-  ctx.fillStyle = `rgb(${deep[0]},${deep[1]},${deep[2]})`;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = T.seaColor(season);
+  ctx.fillRect(0, 0, bw, bh);
+  ctx.setTransform(1, 0, 0, 1, -ox, -oy);
+  const view = { x0: ox, y0: oy, x1: ox + bw, y1: oy + bh }; // art pixels
+  T.drawGround(ctx, season, L, view);
 
-  const z = cam.z;
-  const view = {
-    x0: cam.x - W / 2 / z, x1: cam.x + W / 2 / z,
-    y0: cam.y - H / 2 / z, y1: cam.y + H / 2 / z,
-  };
-  ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * (W / 2 - cam.x * z), dpr * (H / 2 - cam.y * z));
-  ctx.imageSmoothingEnabled = true;
-  T.drawGround(ctx, season, z * dpr, view);
-  SP.setRenderScale(z * dpr);
+  if (!app.low) drawWaterSparkles(t, view, u, season);
+  drawCloudShadows(t, view, u, w);
 
-  if (!app.low) {
-    drawWaterSparkles(t, view, season);
-    drawCloudShadows(t, view, w);
-  }
-
-  // gather everything that stands up, sort by base y
+  // everything that stands up, sorted by where it touches the ground
   const sc = S.scenery();
   const items = [];
-  const pad = 80;
-  const inView = (x, y) => x > view.x0 - pad && x < view.x1 + pad && y > view.y0 - 40 && y < view.y1 + pad * 1.5;
+  const padX = 40, padTop = 10, padBot = 70; // art pixels
+  const vx0 = (view.x0 - padX) / u, vx1 = (view.x1 + padX) / u, vy0 = (view.y0 - padTop) / u, vy1 = (view.y1 + padBot) / u;
+  const inView = (x, y) => x > vx0 && x < vx1 && y > vy0 && y < vy1;
   const sun = localDaylight();
   const night = 1 - sun.day;
-  for (const tr of sc.trees) if (inView(tr.x, tr.y)) items.push([tr.y, 0, tr]);
-  for (const rk of sc.rocks) if (inView(rk.x, rk.y)) items.push([rk.y, 1, rk]);
-  for (const m of sc.mushrooms) if (inView(m.x, m.y)) items.push([m.y, 3, m]);
-  for (const r of sc.reeds) if (inView(r.x, r.y)) items.push([r.y, 4, r]);
+  if (L < T.BAKE_LEVEL) { // further out these are baked into the ground tiles
+    for (const tr of sc.trees) if (inView(tr.x, tr.y)) items.push([tr.y, 0, tr]);
+    for (const rk of sc.rocks) if (inView(rk.x, rk.y)) items.push([rk.y, 1, rk]);
+    for (const m of sc.mushrooms) if (inView(m.x, m.y)) items.push([m.y, 3, m]);
+    for (const r of sc.reeds) if (inView(r.x, r.y)) items.push([r.y, 4, r]);
+    for (const sh of sc.shrubs) if (inView(sh.x, sh.y)) items.push([sh.y, 7, sh]);
+  }
   w.bushes.forEach((b, i) => { if (inView(b.x, b.y)) items.push([b.y, 2, b, i]); });
   for (const gv of w.graves) if (inView(gv.x, gv.y)) items.push([gv.y, 5, gv]);
   const drawn = [];
@@ -452,130 +480,135 @@ function render(t, dt) {
   // see-through trees and rocks when someone is standing behind them
   const occluded = o => {
     const hw = o.kind === undefined ? 26 : 30, ht = o.big !== undefined ? 30 : 78;
-    for (const [, p] of drawn) {
-      if (p[1] < o.y - 2 && p[1] > o.y - ht && Math.abs(p[0] - o.x) < hw) return true;
-    }
+    for (const [, p] of drawn) if (p[1] < o.y - 2 && p[1] > o.y - ht && Math.abs(p[0] - o.x) < hw) return true;
     return false;
   };
 
-  // selection ring goes on the ground first
   const sel = app.selected >= 0 ? byId(app.selected) : null;
   if (sel) {
     const p = renderPos(sel, a);
-    ctx.save();
-    ctx.translate(p[0], p[1]);
-    ctx.setLineDash([6, 5]); ctx.lineDashOffset = -t * 20;
-    ctx.strokeStyle = '#ffd23f'; ctx.lineWidth = 3.2;
-    const r = S.radius(sel) * 1.6 + 6;
-    ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.38, 0, 0, Math.PI * 2); ctx.stroke();
-    ctx.restore();
+    drawRing(Math.round(p[0] * u), Math.round(p[1] * u), Math.max(3, Math.round(S.radius(sel) * u * 1.5 + 2)), t);
   }
 
   const nowMs = performance.now();
   for (const it of items) {
-    const kind = it[1];
-    const o = it[2];
-    ctx.save();
+    const kind = it[1], o = it[2];
     if (kind === 6) {
-      ctx.translate(it[3][0], it[3][1]);
+      const p = it[3];
+      let X = Math.round(p[0] * u), Y = Math.round(p[1] * u);
       if (app.held && app.held.id === o.id) {
-        // lifted off the ground and dangling a little
-        ctx.fillStyle = 'rgba(20,30,20,0.22)';
-        ctx.beginPath(); ctx.ellipse(0, 0, S.radius(o), S.radius(o) * 0.35, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.translate(0, -22);
-        ctx.rotate(Math.sin(t * 9) * 0.12);
-      }
+        SP.drawShadow(ctx, X, Y, S.radius(o) * u);
+        Y -= Math.max(3, Math.round(22 * u));
+        X += Math.round(Math.sin(t * 9));
+      } else SP.drawShadow(ctx, X, Y, S.radius(o) * u * 0.95);
       const hurt = app.hurtFlash.get(o.id);
-      if (hurt && hurt > nowMs) ctx.translate(Math.sin(t * 70) * 3, 0);
-      drawCreature(o, it[3], t, dt);
-    } else {
-      ctx.translate(o.x, o.y);
-      if ((kind === 0 || kind === 1) && !app.low && occluded(o)) {
-        drawFaded(kind === 0 ? 46 : 40, kind === 0 ? 95 : 45, c2 => kind === 0 ? SP.drawTree(c2, o, season, t, night) : SP.drawRock(c2, o, season));
-      } else if (kind === 0) SP.drawTree(ctx, o, season, t, night);
-      else if (kind === 1) SP.drawRock(ctx, o, season);
-      else if (kind === 2) SP.drawBush(ctx, o, season, t, (app.shake.get(o.x * 7 + o.y) || 0) > nowMs);
-      else if (kind === 3) SP.drawMushroom(ctx, o, t, night);
-      else if (kind === 4) SP.drawReeds(ctx, o, t);
-      else if (kind === 5) SP.drawGrave(ctx, o, Math.min(1, (o.t + 2400 - w.tick) / 400));
+      if (hurt && hurt > nowMs) X += Math.round(Math.sin(t * 70));
+      drawCreature(o, p, X, Y, t, dt, u);
+      continue;
     }
-    ctx.restore();
+    const X = Math.round(o.x * u), Y = Math.round(o.y * u);
+    if (kind === 0 || kind === 1) {
+      const cv = kind === 0 ? SP.tree(o, season, u) : SP.rock(o, season, u);
+      if (!app.low && L === 0 && occluded(o)) { ctx.globalAlpha = 0.45; SP.stamp(ctx, cv, X, Y); ctx.globalAlpha = 1; }
+      else SP.stamp(ctx, cv, X, Y);
+    } else if (kind === 2) SP.drawBush(ctx, o, X, Y, season, u, (app.shake.get(o.x * 7 + o.y) || 0) > nowMs);
+    else if (kind === 3) {
+      SP.stamp(ctx, SP.mushroom(u), X, Y);
+      if (night > 0.2 && !app.low) glow(X, Y - Math.round(9 * u), Math.max(2, Math.round(10 * u)), [190, 140, 255], 0.35 * night);
+    } else if (kind === 4) SP.drawReeds(ctx, X, Y, t, u, o.k * 10);
+    else if (kind === 5) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, (o.t + 2400 - w.tick) / 400));
+      SP.stamp(ctx, SP.grave(o, u), X, Y);
+      ctx.globalAlpha = 1;
+    } else if (kind === 7) SP.stamp(ctx, SP.shrub(season, u), X, Y);
   }
 
-  // emotes and particles on top
-  if (z * dpr > (app.low ? 1.2 : 0.75)) for (const [c, p] of drawn) drawEmote(c, p, t);
-  drawParticles(t, dt);
-  if (sel) drawNameTag(sel, renderPos(sel, a), true);
+  if (L === 0) for (const [c, p] of drawn) drawEmote(c, p, t, u);
+  drawParticles(t, dt, u);
+  if (sel) drawNameTag(sel, renderPos(sel, a), true, u);
   if (app.hover >= 0 && app.hover !== app.selected) {
     const hc = byId(app.hover);
-    if (hc) drawNameTag(hc, renderPos(hc, a), false);
+    if (hc) drawNameTag(hc, renderPos(hc, a), false, u);
   }
 
-  // light: weather + time of day (viewer's local time)
+  // light: weather + time of day (the viewer's own clock)
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   const weather = S.weatherAt(w.tick);
-  drawSky(sun, weather, season);
-  drawWeather(t, dt, weather);
-  ctx.setTransform(dpr * z, 0, 0, dpr * z, dpr * (W / 2 - cam.x * z), dpr * (H / 2 - cam.y * z));
-  if (night > 0.05 && !app.low) drawNightLights(t, dt, view, drawn, night);
+  drawSky(sun, weather, bw, bh);
+  drawWeather(t, dt, weather, bw, bh);
+  ctx.setTransform(1, 0, 0, 1, -ox, -oy);
+  if (night > 0.05 && !app.low) drawNightLights(t, dt, view, u, drawn, night);
 }
 
-// draw something into a scratch canvas, then stamp it semi-transparent
-const fadeCanvas = document.createElement('canvas');
-const fadeCtx = fadeCanvas.getContext('2d');
-function drawFaded(hw, ht, fn) {
-  const sc = app.cam.z * app.dpr;
-  const pw = Math.ceil(hw * 2 * sc), phh = Math.ceil((ht + 12) * sc);
-  if (fadeCanvas.width < pw || fadeCanvas.height < phh) { fadeCanvas.width = Math.max(pw, fadeCanvas.width); fadeCanvas.height = Math.max(phh, fadeCanvas.height); }
-  fadeCtx.setTransform(1, 0, 0, 1, 0, 0);
-  fadeCtx.clearRect(0, 0, pw, phh);
-  fadeCtx.setTransform(sc, 0, 0, sc, hw * sc, ht * sc);
-  fn(fadeCtx);
-  ctx.globalAlpha = 0.4;
-  ctx.drawImage(fadeCanvas, 0, 0, pw, phh, -hw, -ht, pw / sc, phh / sc);
-  ctx.globalAlpha = 1;
+// a soft pixel glow (additive), drawn as stacked squares so it stays blocky
+function glow(X, Y, r, rgbc, a) {
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = r; i >= 1; i -= Math.max(1, Math.floor(r / 3))) {
+    ctx.fillStyle = `rgba(${rgbc[0]},${rgbc[1]},${rgbc[2]},${(a / 3).toFixed(3)})`;
+    ctx.fillRect(X - i, Y - Math.ceil(i * 0.7), i * 2 + 1, Math.ceil(i * 0.7) * 2 + 1);
+  }
+  ctx.globalCompositeOperation = 'source-over';
 }
 
-function drawCreature(c, p, t, dt) {
+// a dashed pixel ellipse that crawls around the selected creature
+const ringCache = new Map();
+function drawRing(X, Y, rx, t) {
+  const ry = Math.max(2, Math.round(rx * 0.4));
+  const key = `${rx}|${ry}`;
+  let pts = ringCache.get(key);
+  if (!pts) {
+    pts = [];
+    const seen = new Set();
+    const n = Math.ceil((rx + ry) * 8);
+    for (let i = 0; i < n; i++) {
+      const ang = i / n * Math.PI * 2;
+      const x = Math.round(Math.cos(ang) * rx), y = Math.round(Math.sin(ang) * ry);
+      const kk = `${x},${y}`;
+      if (!seen.has(kk)) { seen.add(kk); pts.push([x, y]); }
+    }
+    ringCache.set(key, pts);
+  }
+  const off = Math.floor(t * 8);
+  ctx.fillStyle = '#ffd23f';
+  for (let i = 0; i < pts.length; i++) if (((i + off) >> 2) % 2 === 0) ctx.fillRect(X + pts[i][0], Y + pts[i][1], 1, 1);
+}
+
+function drawCreature(c, p, X, Y, t, dt, u) {
   // facing with a little hysteresis so they don't flicker
   let f = app.facing.get(c.id) || (c.hx >= 0 ? 1 : -1);
   if (c.hx > 0.25) f = 1; else if (c.hx < -0.25) f = -1;
   app.facing.set(c.id, f);
   const prev = app.prev.get(c.id);
   const moving = !!prev && (Math.abs(prev[0] - c.x) + Math.abs(prev[1] - c.y)) > 0.3;
-  let ph = app.walk.get(c.id) || Math.random();
+  let ph = app.walk.get(c.id) ?? Math.random();
   if (moving) ph += dt * (c.s === 0 ? 3.4 : 2.6) * Math.min(1.8, S.speedOf(c) / 5.5);
   app.walk.set(c.id, ph);
 
   // where to look
-  let lx = c.hx * 0.7, ly = c.hy * 0.5;
+  let lx = c.hx, ly = c.hy * 0.6;
   let tgt = null;
   if ((c.st === S.ST.FLEE || c.st === S.ST.HUNT || c.st === S.ST.MATE) && c.tg >= 0) tgt = byId(c.tg);
-  else if ((c.st === S.ST.FOOD || c.st === S.ST.EAT) && c.tg >= 0 && app.w.bushes[c.tg]) tgt = app.w.bushes[c.tg];
+  else if (c.st === S.ST.EAT && c.tg >= 0 && app.w.bushes[c.tg]) tgt = app.w.bushes[c.tg];
   if (tgt) {
     const dx = tgt.x - p[0], dy = tgt.y - p[1], d = Math.sqrt(dx * dx + dy * dy) || 1;
-    lx = dx / d; ly = dy / d * 0.7;
+    lx = dx / d; ly = dy / d * 0.8;
   } else if (!moving) {
-    lx = Math.sin(t * 0.6 + c.id) * 0.8; ly = Math.sin(t * 0.37 + c.id * 2) * 0.4;
+    // idle: glance around now and then
+    const k = Math.floor(t * 0.7 + c.id * 0.37);
+    lx = Math.sin(k * 12.9898 + c.id) > 0 ? 1 : -1; ly = Math.sin(k * 78.233) > 0.4 ? 1 : 0;
+    lx *= f;
   }
-  if (c.st === S.ST.GRAZE) { lx = 0.3; ly = 0.9; }
-  const prevLook = app.look.get(c.id) || [lx, ly];
-  const k = Math.min(1, dt * 8);
-  const look = [prevLook[0] + (lx - prevLook[0]) * k, prevLook[1] + (ly - prevLook[1]) * k];
-  app.look.set(c.id, look);
-
+  if (c.st === S.ST.GRAZE) { lx = 0.3 * f; ly = 1; }
   const o = {
-    t, walk: ph, moving, facing: f, lookX: look[0], lookY: look[1], growth: S.growth(c),
+    t, facing: f, lookX: lx * f, lookY: ly,
+    frame: moving ? 2 + (Math.floor(ph * 4) & 3) : (Math.floor(t * 1.1 + c.id * 0.31) & 1),
     mood: 'open', mouth: 'smile',
+    blink: ((t * 0.7 + c.id * 0.37) % 4.2) < 0.15,
   };
+  if (app.reducedMotion && !moving) o.frame = 0;
   if (!app.seen.has(c.id)) {
     app.seen.add(c.id);
     if (c.age < 40) addParticle({ kind: 'sparkle', x: p[0], y: p[1] - 12, life: 0.9 });
-  }
-  if (S.radius(c) * app.cam.z * app.dpr < (app.low ? 16 : 11)) {
-    if (c.st === S.ST.SLEEP) o.mood = 'closed';
-    SP.drawTiny(ctx, c, o);
-    return;
   }
   if (c.s === 0) {
     if (c.st === S.ST.SLEEP) o.mood = 'closed';
@@ -584,7 +617,6 @@ function drawCreature(c, p, t, dt) {
     else if (c.st === S.ST.MATE) o.mood = 'happy';
     else if (c.st === S.ST.STUN) o.mood = 'dizzy';
     else if (c.e < S.maxEnergy(c) * 0.2) o.mouth = 'o';
-    SP.drawDumpling(ctx, c, o);
   } else {
     o.mood = 'grumpy';
     if (c.st === S.ST.SLEEP) o.mood = 'closed';
@@ -592,88 +624,49 @@ function drawCreature(c, p, t, dt) {
     else if (c.st === S.ST.FEAST) { o.mood = 'happy'; o.mouth = 'chomp'; }
     else if (c.st === S.ST.STUN) o.mood = 'dizzy';
     else if (c.st === S.ST.MATE) o.mood = 'open';
-    SP.drawGrumble(ctx, c, o);
   }
+  SP.drawCreature(ctx, c, X, Y, o, u);
 }
 
-function headY(c) { return -S.radius(c) * (c.s === 0 ? 2.3 : 2.9) - 6; }
+function headY(c, u) { return SP.headTop(c, u) - 2; }
 
-function drawEmote(c, p, t) {
-  const y = headY(c);
-  ctx.save();
-  ctx.translate(p[0], p[1]);
-  ctx.font = '700 15px "Comic Neue", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.lineJoin = 'round';
+function drawEmote(c, p, t, u) {
+  const X = Math.round(p[0] * u), Y = Math.round(p[1] * u) + headY(c, u);
   if (c.st === S.ST.SLEEP) {
-    for (let i = 0; i < 3; i++) {
-      const k = ((t * 0.5 + i / 3 + c.id * 0.13) % 1);
-      ctx.globalAlpha = Math.sin(k * Math.PI);
-      ctx.font = `700 ${10 + k * 8}px "Comic Neue", sans-serif`;
-      outlinedText('z', 8 + k * 14 + Math.sin(k * 6) * 3, y + 8 - k * 26, '#ffffff', 3);
+    for (let i = 0; i < 2; i++) {
+      const k = (t * 0.35 + i / 2 + c.id * 0.13) % 1;
+      if (k > 0.85) continue;
+      SP.stamp(ctx, SP.fx('z'), X + 3 + Math.round(k * 5), Y + 3 - Math.round(k * 8));
     }
   } else if (c.st === S.ST.FLEE && c.s === 0) {
-    // sweat drop
-    const r = S.radius(c);
-    ctx.fillStyle = '#8fd3ff'; ctx.strokeStyle = SP.INK; ctx.lineWidth = 1.6;
-    const sx = -r * 0.9, sy = -r * 2.0 + Math.sin(t * 10) * 1.5;
-    ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.quadraticCurveTo(sx + 4.5, sy + 1, sx, sy + 3); ctx.quadraticCurveTo(sx - 4.5, sy + 1, sx, sy - 6); ctx.fill(); ctx.stroke();
+    SP.stamp(ctx, SP.fx('drop'), X - Math.round(S.radius(c) * u) - 1, Y + 4 + (Math.floor(t * 8) & 1));
   } else if (c.st === S.ST.MATE) {
-    SP.heart(ctx, 0, y + 2 + Math.sin(t * 6) * 2, 1 + Math.sin(t * 8) * 0.1);
+    SP.stamp(ctx, SP.fx('heart'), X, Y - 1 - (Math.floor(t * 4) & 1));
   } else if (c.st === S.ST.STUN) {
     for (let i = 0; i < 3; i++) {
-      const ang = t * 6 + i * 2.1;
-      drawStar(Math.cos(ang) * 14, y + 10 + Math.sin(ang) * 4, 4);
+      const ang = t * 5 + i * 2.1;
+      SP.stamp(ctx, SP.fx('star'), X + Math.round(Math.cos(ang) * 6), Y + 3 + Math.round(Math.sin(ang) * 2));
     }
   } else if (c.s === 1 && c.st === S.ST.HUNT) {
-    // little anger mark
-    ctx.strokeStyle = '#e8344e'; ctx.lineWidth = 2.4;
-    const ax = S.radius(c) * 0.9, ay = y + 12;
-    ctx.beginPath();
-    ctx.moveTo(ax - 4, ay - 1); ctx.lineTo(ax - 1, ay - 1); ctx.lineTo(ax - 1, ay - 4);
-    ctx.moveTo(ax + 4, ay - 1); ctx.lineTo(ax + 1, ay - 1); ctx.lineTo(ax + 1, ay - 4);
-    ctx.moveTo(ax - 4, ay + 3); ctx.lineTo(ax - 1, ay + 3); ctx.lineTo(ax - 1, ay + 6);
-    ctx.moveTo(ax + 4, ay + 3); ctx.lineTo(ax + 1, ay + 3); ctx.lineTo(ax + 1, ay + 6);
-    ctx.stroke();
+    SP.stamp(ctx, SP.fx('anger'), X + Math.round(S.radius(c) * u * 0.8), Y + 3);
   }
-  ctx.restore();
 }
 
-function drawStar(x, y, r) {
-  ctx.beginPath();
-  for (let i = 0; i < 10; i++) {
-    const a = i * Math.PI / 5 - Math.PI / 2, rr = i % 2 ? r * 0.45 : r;
-    ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
-  }
-  ctx.closePath();
-  ctx.fillStyle = '#ffd23f'; ctx.fill();
-  ctx.strokeStyle = SP.INK; ctx.lineWidth = 1.2; ctx.stroke();
-}
-
-function outlinedText(s, x, y, fill, lw) {
-  ctx.strokeStyle = SP.INK; ctx.lineWidth = lw;
-  ctx.strokeText(s, x, y);
-  ctx.fillStyle = fill; ctx.fillText(s, x, y);
-}
-
-function drawNameTag(c, p, strong) {
+function drawNameTag(c, p, strong, u) {
   if (!p) return;
-  ctx.save();
-  ctx.translate(p[0], p[1] + headY(c) - (c.st === S.ST.SLEEP ? 22 : 6));
-  const s = Math.max(0.8, 1.1 / Math.sqrt(app.cam.z));
-  ctx.scale(s, s);
-  ctx.font = '700 14px "Comic Neue", sans-serif';
-  const tw = ctx.measureText(c.n).width;
-  ctx.fillStyle = strong ? '#ffd23f' : '#ffffff';
-  ctx.strokeStyle = SP.INK; ctx.lineWidth = 2.2;
-  const bw = tw + 14, bh = 20;
-  ctx.beginPath(); ctx.roundRect(-bw / 2, -bh, bw, bh, 7); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = SP.INK; ctx.textAlign = 'center';
-  ctx.fillText(c.n, 0, -5);
-  ctx.restore();
+  const X = Math.round(p[0] * u), Y = Math.round(p[1] * u) + headY(c, u) - (c.st === S.ST.SLEEP ? 10 : 2);
+  const tw = textWidth(c.n);
+  const x0 = X - Math.floor(tw / 2) - 3, y0 = Y - 9;
+  ctx.fillStyle = SP_INK;
+  ctx.fillRect(x0, y0, tw + 6, 9);
+  ctx.fillStyle = strong ? '#ffd23f' : '#fff8e8';
+  ctx.fillRect(x0 + 1, y0 + 1, tw + 4, 7);
+  ctx.drawImage(textSprite(c.n, INK, 0), x0 + 1, y0 + 1);
+  ctx.fillStyle = 'rgba(24,20,30,0.35)';
+  ctx.fillRect(x0 + 1, y0 + 9, tw + 6, 1);
 }
 
-function drawParticles(t, dt) {
+function drawParticles(t, dt, u) {
   const ps = app.particles;
   let keep = 0;
   for (let i = 0; i < ps.length; i++) {
@@ -683,118 +676,105 @@ function drawParticles(t, dt) {
     ps[keep++] = p;
     p.x += p.vx * dt; p.y += p.vy * dt;
     if (p.g) p.vy += p.g * dt;
-    ctx.save();
+    let X, Y;
     if (p.follow !== undefined) {
       const c = byId(p.follow);
-      if (!c) { ctx.restore(); continue; }
+      if (!c) continue;
       const q = renderPos(c, alphaNow());
-      ctx.translate(q[0], q[1] + headY(c) + 8 - k * 10);
-    } else ctx.translate(p.x, p.y);
+      X = Math.round(q[0] * u); Y = Math.round(q[1] * u) + headY(c, u) - Math.round(k * 4);
+      p.dy = 0;
+    } else { X = Math.round(p.x * u); Y = Math.round(p.y * u); }
     switch (p.kind) {
       case 'heart':
-        ctx.globalAlpha = 1 - k * k;
-        SP.heart(ctx, Math.sin(k * 8) * 4, 0, p.s);
+        ctx.globalAlpha = k > 0.7 ? (1 - k) / 0.3 : 1;
+        SP.stamp(ctx, SP.fx('heart'), X + Math.round(Math.sin(k * 8) * 2), Y);
         break;
       case 'crumb':
-        ctx.fillStyle = p.color; ctx.strokeStyle = SP.INK; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        SP.stamp(ctx, SP.fx('crumb'), X, Y);
         break;
       case 'puff':
-        ctx.globalAlpha = (1 - k) * 0.9;
-        ctx.fillStyle = '#ffffff'; ctx.strokeStyle = SP.INK; ctx.lineWidth = 1.6;
-        ctx.beginPath(); ctx.arc(0, 0, p.r * (0.6 + k * 0.8), 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.globalAlpha = k > 0.6 ? (1 - k) / 0.4 : 1;
+        SP.stamp(ctx, SP.puff(p.r * u * (0.6 + k * 0.8)), X, Y);
         break;
       case 'ghost':
-        SP.drawGhost(ctx, k, p.s);
+        ctx.globalAlpha = Math.max(0, 1 - k) * 0.9;
+        SP.stamp(ctx, SP.fx('ghost'), X + Math.round(Math.sin(k * 9) * 2), Y - Math.round(k * 16));
         break;
-
       case 'sparkle':
-        ctx.globalAlpha = 1 - k;
-        for (let j = 0; j < 4; j++) drawStar(Math.cos(j * 1.57 + k * 2) * (8 + k * 16), Math.sin(j * 1.57 + k * 2) * (8 + k * 12), 3.5 * (1 - k * 0.5));
+        if ((Math.floor(t * 12) & 1) || k < 0.5) for (let j = 0; j < 4; j++) {
+          const r = 3 + Math.round(k * 6);
+          SP.stamp(ctx, SP.fx('sparkle'), X + Math.round(Math.cos(j * 1.57 + k * 2) * r), Y + Math.round(Math.sin(j * 1.57 + k * 2) * r * 0.8));
+        }
         break;
-      case 'text': {
-        const pop = Math.min(1, k * 6);
-        ctx.globalAlpha = k > 0.75 ? (1 - k) * 4 : 1;
-        ctx.rotate(p.rot || 0);
-        ctx.scale(0.6 + pop * 0.4, 0.6 + pop * 0.4);
-        ctx.font = `700 ${p.size}px "Comic Neue", sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.lineJoin = 'round';
-        outlinedText(p.text, 0, (p.dy || 0), p.color, 4);
+      case 'text':
+        if (k > 0.8 && (Math.floor(t * 16) & 1)) break; // blink out
+        SP.stamp(ctx, textSprite(p.text, p.color), X, Y + (p.dy ? Math.round(p.dy * u) : 0) - (k < 0.1 ? 1 : 0));
         break;
-      }
     }
-    ctx.restore();
+    ctx.globalAlpha = 1;
   }
   ps.length = keep;
 }
 
-// soft sparkles on the water so the sea feels alive
-function drawWaterSparkles(t, view, season) {
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)';
-  ctx.lineWidth = 2; ctx.lineCap = 'round';
-  const C = 90;
+// little white wave crests that come and go on open water
+function drawWaterSparkles(t, view, u, season) {
+  if (season === 3 && u < 0.2) return;
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  const C = 26;
   for (let gy = Math.floor(view.y0 / C); gy <= Math.floor(view.y1 / C); gy++) {
     for (let gx = Math.floor(view.x0 / C); gx <= Math.floor(view.x1 / C); gx++) {
-      const h = S.hash01(gx, gy, 99);
-      const x = gx * C + h * C, y = gy * C + S.hash01(gx, gy, 98) * C;
-      if (x < -200 || y < -200 || x > S.WORLD_W + 200 || y > S.WORLD_H + 200) continue;
-      if (S.elevAt(Math.max(0, Math.min(S.WORLD_W, x)), Math.max(0, Math.min(S.WORLD_H, y))) > S.LEVEL.WATER - 0.03) continue;
-      const k = (t * 0.25 + h * 7) % 1;
-      const s = Math.sin(k * Math.PI);
-      if (s < 0.05) continue;
-      ctx.globalAlpha = s * 0.8;
-      const wv = 6 + s * 6;
-      ctx.beginPath();
-      ctx.moveTo(x - wv, y); ctx.quadraticCurveTo(x - wv / 2, y - 4, x, y); ctx.quadraticCurveTo(x + wv / 2, y - 4, x + wv, y);
-      ctx.stroke();
+      const h = S.hash01(gx, gy, 99 + app.view.L);
+      const k = (t * 0.22 + h * 7) % 1;
+      if (k > 0.5) continue;
+      const X = gx * C + Math.floor(S.hash01(gx, gy, 98) * C), Y = gy * C + Math.floor(S.hash01(gx, gy, 97) * C);
+      const wx = X / u, wy = Y / u;
+      if (wx < 0 || wy < 0 || wx > S.WORLD_W || wy > S.WORLD_H || S.elevAt(wx, wy) > S.LEVEL.WATER - 0.03) continue;
+      const len = k < 0.12 || k > 0.38 ? 2 : 4;
+      ctx.fillRect(X - (len >> 1), Y, len, 1);
+      if (len === 4) { ctx.fillRect(X - 3, Y + 1, 1, 1); ctx.fillRect(X + 2, Y + 1, 1, 1); }
     }
   }
-  ctx.restore();
 }
 
-function drawCloudShadows(t, view, w) {
+function drawCloudShadows(t, view, u, w) {
   const weather = S.weatherAt(w.tick);
-  const n = weather === 'clear' ? 3 : 7;
-  ctx.save();
-  ctx.fillStyle = 'rgba(30,50,80,0.09)';
+  const n = weather === 'clear' ? 4 : 9;
+  ctx.fillStyle = 'rgba(30,40,80,0.10)';
   for (let i = 0; i < n; i++) {
     const sp = 10 + S.hash01(i, 1, 5) * 8;
-    const span = S.WORLD_W + 1200;
-    const x = ((S.hash01(i, 2, 5) * span + t * sp) % span) - 600;
-    const y = S.hash01(i, 3, 5) * S.WORLD_H;
-    const r = 140 + S.hash01(i, 4, 5) * 160;
+    const span = S.WORLD_W + 1600;
+    const x = (((S.hash01(i, 2, 5) * span + t * sp) % span) - 800) * u;
+    const y = S.hash01(i, 3, 5) * S.WORLD_H * u;
+    const r = (160 + S.hash01(i, 4, 5) * 200) * u;
     if (x + r * 2 < view.x0 || x - r * 2 > view.x1 || y + r < view.y0 || y - r > view.y1) continue;
-    ctx.beginPath();
-    ctx.ellipse(x, y, r, r * 0.55, 0, 0, Math.PI * 2);
-    ctx.ellipse(x + r * 0.7, y + r * 0.1, r * 0.7, r * 0.42, 0, 0, Math.PI * 2);
-    ctx.ellipse(x - r * 0.6, y + r * 0.12, r * 0.6, r * 0.36, 0, 0, Math.PI * 2);
-    ctx.fill();
+    // blocky: stack a few rectangles instead of a smooth ellipse
+    const rows = 6, hh = r * 0.55 / rows;
+    for (let j = -rows; j <= rows; j++) {
+      const f = Math.sqrt(1 - (j / (rows + 0.5)) ** 2);
+      const ya = Math.round(y + j * hh), yb = Math.round(y + (j + 1) * hh);
+      if (yb > ya) ctx.fillRect(Math.round(x - r * f * 1.3), ya, Math.round(r * f * 2.6), yb - ya);
+    }
   }
-  ctx.restore();
 }
 
-function drawSky(sun, weather, season) {
-  const cw = canvas.width, ch = canvas.height;
+function drawSky(sun, weather, cw, ch) {
   const night = 1 - sun.day;
   ctx.save();
   ctx.globalCompositeOperation = 'multiply';
   if (weather !== 'clear') {
-    ctx.fillStyle = weather === 'cloudy' ? 'rgb(232,236,242)' : 'rgb(210,218,230)';
+    ctx.fillStyle = weather === 'cloudy' ? 'rgb(228,232,240)' : 'rgb(204,212,226)';
     ctx.fillRect(0, 0, cw, ch);
   }
   if (sun.dusk > 0.02 && sun.day > 0.05) {
-    // golden hour: warm the colours without muddying them
     ctx.globalCompositeOperation = 'soft-light';
     ctx.globalAlpha = sun.dusk * 0.6 * Math.min(1, sun.day * 2);
-    ctx.fillStyle = 'rgb(255,150,70)';
+    ctx.fillStyle = 'rgb(255,140,70)';
     ctx.fillRect(0, 0, cw, ch);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = 'multiply';
   }
   if (night > 0.01) {
-    const r = Math.round(255 - night * 158), g = Math.round(255 - night * 146), b = Math.round(255 - night * 78);
+    const r = Math.round(255 - night * 165), g = Math.round(255 - night * 150), b = Math.round(255 - night * 80);
     ctx.fillStyle = `rgb(${r},${g},${b})`;
     ctx.fillRect(0, 0, cw, ch);
   }
@@ -802,70 +782,57 @@ function drawSky(sun, weather, season) {
 }
 
 const drops = [];
-function drawWeather(t, dt, weather) {
-  const cw = canvas.width, ch = canvas.height, dpr = app.dpr;
+function drawWeather(t, dt, weather, cw, ch) {
   if ((weather !== 'rain' && weather !== 'snow') || app.reducedMotion) { drops.length = 0; return; }
-  const want = Math.round((cw * ch) / (weather === 'rain' ? 9000 : 14000) / dpr / (app.low ? 3 : 1));
+  const want = Math.round(cw * ch / (weather === 'rain' ? 420 : 380) / (app.low ? 2 : 1));
   while (drops.length < want) drops.push({ x: Math.random() * cw, y: Math.random() * ch, s: 0.6 + Math.random() * 0.8, p: Math.random() * 6 });
   drops.length = Math.min(drops.length, want);
-  ctx.save();
   if (weather === 'rain') {
-    ctx.strokeStyle = 'rgba(220,235,255,0.55)';
-    ctx.lineWidth = 1.6 * dpr; ctx.lineCap = 'round';
-    ctx.beginPath();
+    ctx.fillStyle = 'rgba(220,235,255,0.6)';
     for (const d of drops) {
-      d.y += 900 * d.s * dt * dpr; d.x += 120 * d.s * dt * dpr;
-      if (d.y > ch) { d.y -= ch + 20; d.x = Math.random() * cw; }
+      d.y += 260 * d.s * dt; d.x += 40 * d.s * dt;
+      if (d.y > ch) { d.y -= ch + 6; d.x = Math.random() * cw; }
       if (d.x > cw) d.x -= cw;
-      ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - 4 * dpr * d.s, d.y - 22 * dpr * d.s);
+      const x = Math.floor(d.x), y = Math.floor(d.y);
+      ctx.fillRect(x, y, 1, 2); ctx.fillRect(x - 1, y - 2, 1, 2);
     }
-    ctx.stroke();
   } else {
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.strokeStyle = 'rgba(120,140,170,0.6)';
-    ctx.lineWidth = 1 * dpr;
+    ctx.fillStyle = '#ffffff';
     for (const d of drops) {
-      d.y += 50 * d.s * dt * dpr; d.x += Math.sin(t * 1.3 + d.p) * 22 * dt * dpr;
-      if (d.y > ch) { d.y -= ch + 10; d.x = Math.random() * cw; }
-      ctx.beginPath(); ctx.arc(d.x, d.y, 2.4 * d.s * dpr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      d.y += 16 * d.s * dt; d.x += Math.sin(t * 1.3 + d.p) * 7 * dt;
+      if (d.y > ch) { d.y -= ch + 4; d.x = Math.random() * cw; }
+      const sz = d.s > 1.15 ? 2 : 1;
+      ctx.fillRect(Math.floor(d.x), Math.floor(d.y), sz, sz);
     }
   }
-  ctx.restore();
 }
 
-function drawNightLights(t, dt, view, drawn, night) {
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  // fireflies drift around the visible area
-  const want = Math.round(28 * night);
-  while (app.fireflies.length < want) app.fireflies.push({ x: view.x0 + Math.random() * (view.x1 - view.x0), y: view.y0 + Math.random() * (view.y1 - view.y0), p: Math.random() * 10, v: 0.5 + Math.random() });
+function drawNightLights(t, dt, view, u, drawn, night) {
+  // fireflies drift around the visible area (positions in art pixels)
+  const want = Math.round(24 * night);
+  const vw = view.x1 - view.x0, vh = view.y1 - view.y0;
+  while (app.fireflies.length < want) app.fireflies.push({ x: view.x0 + Math.random() * vw, y: view.y0 + Math.random() * vh, p: Math.random() * 10, v: 0.5 + Math.random() });
   app.fireflies.length = Math.min(app.fireflies.length, want);
   for (const f of app.fireflies) {
-    f.x += Math.sin(t * 0.7 * f.v + f.p) * 14 * dt; f.y += Math.cos(t * 0.5 * f.v + f.p * 2) * 10 * dt;
-    if (f.x < view.x0 - 50 || f.x > view.x1 + 50 || f.y < view.y0 - 50 || f.y > view.y1 + 50) {
-      f.x = view.x0 + Math.random() * (view.x1 - view.x0); f.y = view.y0 + Math.random() * (view.y1 - view.y0);
+    f.x += Math.sin(t * 0.7 * f.v + f.p) * 5 * dt; f.y += Math.cos(t * 0.5 * f.v + f.p * 2) * 4 * dt;
+    if (f.x < view.x0 - 10 || f.x > view.x1 + 10 || f.y < view.y0 - 10 || f.y > view.y1 + 10) {
+      f.x = view.x0 + Math.random() * vw; f.y = view.y0 + Math.random() * vh;
     }
-    const blink = Math.max(0, Math.sin(t * 2 * f.v + f.p));
-    if (blink < 0.05) continue;
-    const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, 14);
-    g.addColorStop(0, `rgba(255,240,140,${0.9 * blink * night})`);
-    g.addColorStop(0.25, `rgba(220,255,120,${0.35 * blink * night})`);
-    g.addColorStop(1, 'rgba(200,255,100,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(f.x - 14, f.y - 14, 28, 28);
+    const blink = Math.sin(t * 2 * f.v + f.p);
+    if (blink < 0.2) continue;
+    const X = Math.round(f.x), Y = Math.round(f.y);
+    glow(X, Y, 3, [220, 255, 120], 0.5 * night * blink);
+    ctx.fillStyle = `rgba(255,250,170,${(night * blink).toFixed(2)})`;
+    ctx.fillRect(X, Y, 1, 1);
   }
   // grumbles' eyes catch the light at night
+  if (app.view.L > 0) return;
   for (const [c, p] of drawn) {
     if (c.s !== 1 || c.st === S.ST.SLEEP) continue;
-    const r = S.radius(c), f = app.facing.get(c.id) || 1;
-    for (const ex of [0.05, 0.62]) {
-      const x = p[0] + ex * r * 1.05 * f, y = p[1] - r * 0.3 - r * 1.15 * 0.77;
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r * 0.6);
-      g.addColorStop(0, `rgba(255,230,120,${0.5 * night})`); g.addColorStop(1, 'rgba(255,230,120,0)');
-      ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
-    }
+    const r = S.radius(c) * u, f = app.facing.get(c.id) || 1;
+    const X = Math.round(p[0] * u + f * r * 0.2), Y = Math.round(p[1] * u - r * 1.2);
+    glow(X, Y, Math.max(2, Math.round(r * 0.45)), [255, 220, 110], 0.3 * night);
   }
-  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,6 +980,7 @@ canvas.addEventListener('wheel', e => {
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 function zoomAt(sx, sy, factor) {
+  app.zoomedAt = performance.now();
   const [wx, wy] = screenToWorld(sx, sy);
   setZoom(app.cam.z * factor);
   if (app.camTarget) app.camTarget.z = undefined;
@@ -1029,17 +997,26 @@ window.addEventListener('keydown', e => {
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'w', 'a', 's', 'd'].includes(k)) {
     if (e.target.closest && e.target.closest('[role=tablist], .ranges') && k.startsWith('Arrow')) return;
     app.keys.add(k); e.preventDefault();
-  } else if (k === '+' || k === '=') zoomAt(app.W / 2, app.H / 2, 1.25);
-  else if (k === '-' || k === '_') zoomAt(app.W / 2, app.H / 2, 0.8);
+  } else if (k === '+' || k === '=') stepZoom(1);
+  else if (k === '-' || k === '_') stepZoom(-1);
   else if (k === 'Escape') deselect();
 });
 window.addEventListener('keyup', e => app.keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
 window.addEventListener('blur', () => app.keys.clear());
 
+// keyboard zoom: hop to the next crisp zoom level
+function stepZoom(dir) {
+  const z0 = snapZoom(app.cam.z);
+  let z = z0;
+  for (let f = 1.05; f < 8 && z === z0; f *= 1.05) z = snapZoom(z0 * (dir > 0 ? f : 1 / f));
+  zoomAt(app.W / 2, app.H / 2, z / app.cam.z);
+  app.zoomedAt = 0;
+}
+
 function select(id) {
   app.selected = id;
   app.following = true;
-  if (app.cam.z < 1.3) app.camTarget = { x: app.cam.x, y: app.cam.y, z: 1.5 };
+  if (app.cam.z < defaultZoom() * 0.9) app.camTarget = { x: app.cam.x, y: app.cam.y, z: defaultZoom() };
   UI.showCard(app);
 }
 function deselect() {
@@ -1074,7 +1051,7 @@ const director = {
     this.until = performance.now() + 25000 + Math.random() * 20000;
     if (first) { app.cam.x = best.x; app.cam.y = best.y; clampCam(); }
   },
-  update() {
+  update(dt) {
     if (!this.idle()) return;
     const c = byId(this.id);
     const now = performance.now();
@@ -1082,11 +1059,11 @@ const director = {
     this.lostAt = 0;
     if (now > this.until && c.st !== S.ST.HUNT && c.st !== S.ST.FLEE) { this.next(); return; }
     const p = renderPos(c, alphaNow());
-    const ease = 0.02;
+    const ease = 1 - Math.pow(0.3, dt);
     app.cam.x += (p[0] - app.cam.x) * ease;
     app.cam.y += (p[1] - 20 - app.cam.y) * ease;
-    const zWant = Math.max(minZoom(), Math.min(2, defaultZoom() * 1.15));
-    app.cam.z += (zWant - app.cam.z) * 0.01;
+    const zWant = defaultZoom();
+    if (Math.abs(zWant - app.cam.z) > 0.002) { app.cam.z += (zWant - app.cam.z) * (1 - Math.pow(0.5, dt)); app.zoomedAt = performance.now(); }
     clampCam();
   },
 };

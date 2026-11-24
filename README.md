@@ -4,9 +4,13 @@
 
 ![Dumplings and grumbles on the island](site/og.jpg)
 
-A tiny island ecosystem that never stops. Dumplings eat berries, grumbles eat
+A pixel art island ecosystem that never stops. Dumplings eat berries, grumbles eat
 dumplings, and both have babies that inherit their parents' genes (size, speed,
 sight, colour, hats) with small mutations, so the island slowly evolves.
+
+The island is big (7200 by 4800 world units) but life gathers in a few berry
+groves: dumpling herds live there, grumbles roam from grove to grove, and the
+forests, highlands and beaches in between stay quiet.
 
 **Everyone sees the same world.** The state of the island is a pure function of
 the current time: open it on two devices at once and the same creatures are in
@@ -42,8 +46,12 @@ the same places. No accounts, no server, just GitHub.
 - When nobody touches anything for a while the camera drifts from one
   interesting creature to the next, so it works as something to just watch.
 - No cookies and no local storage: nothing is saved in your browser.
-- Slow devices switch to a light mode automatically (1x pixels, 30 fps, fewer
-  effects). `?quality=low` or `?quality=high` forces one.
+- Everything is pixel art drawn procedurally (`site/js/pixel.js`, `sprites.js`,
+  `terrain.js`): the world is painted into a small buffer, one pixel per art
+  pixel, and scaled up with hard edges. Zoom settles on whole-pixel sizes; far
+  out, trees are baked into the ground tiles so the whole island is cheap to show.
+- Slow devices drop to 30 fps and fewer effects automatically.
+  `?quality=low` or `?quality=high` forces one.
 - Day and night follow the viewer's own clock (that part is only drawn, not
   simulated, so the shared world is the same in every timezone). Seasons belong
   to the island: each one lasts three real hours.
@@ -72,4 +80,4 @@ checkpoint on (the heartbeat notices new code on `main` and restarts with it).
 If a change makes old checkpoints unreadable, bump `SIM_VERSION`: the world is
 then rebuilt from its founding moment, which takes longer the older it is.
 
-Font: [Comic Neue](https://github.com/crozynski/comicneue) (SIL Open Font License).
+Font: [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans) (SIL Open Font License).

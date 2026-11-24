@@ -10,15 +10,15 @@
 // browser that started from an older snapshot follows the exact same path as
 // the GitHub Action that produced a newer one.
 
-export const SIM_VERSION = 2;
+export const SIM_VERSION = 3;
 export const EPOCH_MS = Date.UTC(2026, 10, 23, 0, 0, 0); // world founded
 export const TICK_MS = 250;
 export const TPS = 1000 / TICK_MS;
 export const CHECKPOINT_TICKS = 7200; // 30 real minutes
 export const SEASON_TICKS = 43200; // one Wigglewood season = 3 real hours, a year = 12 hours
 export const WEATHER_TICKS = 4800; // weather changes every 20 minutes
-export const WORLD_W = 2400;
-export const WORLD_H = 1600;
+export const WORLD_W = 7200;
+export const WORLD_H = 4800;
 export const SEED = 0x77176c3d;
 export const SEASONS = ['spring', 'summer', 'autumn', 'winter'];
 
@@ -174,21 +174,23 @@ export function terrain() {
     for (let i = 0; i < FIELD_W; i++) {
       const x = i * FIELD_CELL, y = j * FIELD_CELL;
       const nx = (x - WORLD_W / 2) / (WORLD_W / 2), ny = (y - WORLD_H / 2) / (WORLD_H / 2);
-      // squircle-ish falloff so the island fills the rectangle nicely
+      // squircle-ish falloff, bent by slow noise so the coast gets bays and capes
       const d2 = nx * nx * nx * nx + ny * ny * ny * ny;
-      const d = Math.sqrt(Math.sqrt(d2));
-      let e = fbm(x / 420, y / 420, SEED, 5) * 1.25 - 0.18;
-      e += 0.12 - d * d * 0.72;
-      if (d > 0.8) e -= (d - 0.8) * 3.2; // always sea at the edges of the world
-      // carve a couple of lakes
-      const lake = fbm(x / 260 + 40, y / 260 - 17, SEED + 77, 3);
-      if (lake > 0.66) e -= (lake - 0.66) * 3.2;
-      // mountains: ridge noise in the interior
-      const rn = fbm(x / 300 - 9, y / 300 + 31, SEED + 191, 4);
+      const bend = (fbm(x / 1500 + 7, y / 1500 - 3, SEED + 31, 3) - 0.5) * 0.42;
+      const d = Math.sqrt(Math.sqrt(d2)) + bend;
+      let e = fbm(x / 520, y / 520, SEED, 6) * 1.25 - 0.18;
+      e += 0.13 - d * d * 0.7;
+      if (d > 0.8) e -= (d - 0.8) * 2.6; // open sea towards the edges of the world
+      if (e > 0.44) e = 0.44 + (e - 0.44) * 0.55; // rolling highlands rather than one big ice cap
+      // a scattering of lakes
+      const lake = fbm(x / 300 + 40, y / 300 - 17, SEED + 77, 3);
+      if (lake > 0.68) e -= (lake - 0.68) * 3.4;
+      // mountain ranges: ridge noise in the interior
+      const rn = fbm(x / 760 - 9, y / 760 + 31, SEED + 191, 4);
       const ridge = 1 - Math.abs(rn * 2 - 1);
-      if (ridge > 0.88) e += (ridge - 0.88) * 5.5 * clamp(1 - d * 1.1, 0, 1);
+      if (ridge > 0.88) e += (ridge - 0.88) * 4.6 * clamp(1.05 - d * 1.1, 0, 1);
       elev[j * FIELD_W + i] = e;
-      moist[j * FIELD_W + i] = fbm(x / 350 + 100, y / 350 + 50, SEED + 555, 4);
+      moist[j * FIELD_W + i] = fbm(x / 640 + 100, y / 640 + 50, SEED + 555, 5);
     }
   }
   FIELD = { elev, moist };
@@ -220,7 +222,7 @@ export function moistAt(x, y) { return sampleField(terrain().moist, x, y); }
 // walkability is cached on a fine grid so the per-tick check is a lookup
 const WALK_CELL = 8;
 const WALK_W = WORLD_W / WALK_CELL, WALK_H = WORLD_H / WALK_CELL;
-let WALK = null;
+let WALK = null, MAIN = null;
 function walkGrid() {
   if (WALK) return WALK;
   WALK = new Uint8Array(WALK_W * WALK_H);
@@ -234,12 +236,84 @@ export function walkable(x, y) {
   if (x < 8 || y < 8 || x > WORLD_W - 8 || y > WORLD_H - 8) return false;
   return walkGrid()[Math.floor(y / WALK_CELL) * WALK_W + Math.floor(x / WALK_CELL)] === 1;
 }
+// the biggest stretch of connected land is where everyone lives; the islets
+// offshore are just scenery
+function mainland() {
+  if (MAIN) return MAIN;
+  const g = walkGrid();
+  const label = new Int32Array(WALK_W * WALK_H);
+  const stack = new Int32Array(WALK_W * WALK_H);
+  let best = 0, bestSize = 0, next = 0;
+  for (let s0 = 0; s0 < g.length; s0++) {
+    if (!g[s0] || label[s0]) continue;
+    next++;
+    let sp = 0, size = 0;
+    stack[sp++] = s0; label[s0] = next;
+    while (sp) {
+      const k = stack[--sp]; size++;
+      const i = k % WALK_W, j = (k - i) / WALK_W;
+      if (i > 0 && g[k - 1] && !label[k - 1]) { label[k - 1] = next; stack[sp++] = k - 1; }
+      if (i < WALK_W - 1 && g[k + 1] && !label[k + 1]) { label[k + 1] = next; stack[sp++] = k + 1; }
+      if (j > 0 && g[k - WALK_W] && !label[k - WALK_W]) { label[k - WALK_W] = next; stack[sp++] = k - WALK_W; }
+      if (j < WALK_H - 1 && g[k + WALK_W] && !label[k + WALK_W]) { label[k + WALK_W] = next; stack[sp++] = k + WALK_W; }
+    }
+    if (size > bestSize) { bestSize = size; best = next; }
+  }
+  MAIN = new Uint8Array(WALK_W * WALK_H);
+  for (let k = 0; k < label.length; k++) MAIN[k] = label[k] === best ? 1 : 0;
+  return MAIN;
+}
+export function onMainland(x, y) {
+  if (x < 8 || y < 8 || x > WORLD_W - 8 || y > WORLD_H - 8) return false;
+  return mainland()[Math.floor(y / WALK_CELL) * WALK_W + Math.floor(x / WALK_CELL)] === 1;
+}
+
+// Groves: a handful of sheltered meadows with berry bushes. This is where the
+// dumplings live, so life gathers in a few spots and the rest of the island
+// stays quiet.
+let GROVES = null;
+export function groves() {
+  if (GROVES) return GROVES;
+  const cand = [];
+  const step = 150;
+  for (let y = step; y < WORLD_H - step; y += step) for (let x = step; x < WORLD_W - step; x += step) {
+    const e = elevAt(x, y), m = moistAt(x, y);
+    if (!onMainland(x, y) || e < LEVEL.SAND + 0.05 || e > LEVEL.HILL - 0.08 || m < 0.36 || m > FOREST_MOIST + 0.06) continue;
+    // prefer spots with plenty of walkable meadow around them
+    let ok = 0;
+    for (let k = 0; k < 16; k++) {
+      const d = DIRS[k * 4];
+      if (onMainland(x + d[0] * 220, y + d[1] * 220)) ok++;
+    }
+    if (ok < 15) continue;
+    cand.push({ x, y, h: hash01(x, y, SEED + 61) });
+  }
+  cand.sort((a, b) => a.h - b.h);
+  GROVES = [];
+  for (const c of cand) {
+    if (GROVES.length >= 8) break;
+    if (GROVES.some(g => (g.x - c.x) * (g.x - c.x) + (g.y - c.y) * (g.y - c.y) < 1350 * 1350)) continue;
+    GROVES.push({ x: c.x, y: c.y });
+  }
+  return GROVES;
+}
+export const GROVE_R = 340;
+function nearestGrove(x, y) {
+  const gs = groves();
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < gs.length; i++) {
+    const dx = gs[i].x - x, dy = gs[i].y - y, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
 
 // trees, rocks and other scenery: static, generated from the seed
 let SCENERY = null;
 export function scenery() {
   if (SCENERY) return SCENERY;
-  const trees = [], rocks = [], bushSpots = [], flowers = [], mushrooms = [], reeds = [];
+  const trees = [], rocks = [], bushSpots = [], flowers = [], mushrooms = [], reeds = [], shrubs = [];
+  const gs = groves();
   const step = 26;
   for (let y = step / 2; y < WORLD_H; y += step) {
     for (let x = step / 2; x < WORLD_W; x += step) {
@@ -250,19 +324,24 @@ export function scenery() {
       const h = hash01(ix, iy, SEED + 3);
       const k = hash01(ix, iy, SEED + 4);
       if (e > LEVEL.SAND + 0.02 && e < LEVEL.HILL) {
+        let inGrove = false;
+        for (const g of gs) if ((g.x - jx) * (g.x - jx) + (g.y - jy) * (g.y - jy) < GROVE_R * GROVE_R) inGrove = true;
         if (m > FOREST_MOIST) {
           if (h < 0.11 + (m - FOREST_MOIST) * 1.2) trees.push({ x: jx, y: jy, k, kind: e > 0.36 ? 1 : 0 });
           else if (h > 0.985) mushrooms.push({ x: jx, y: jy, k });
+        } else if (m < 0.4) {
+          if (h < 0.006) shrubs.push({ x: jx, y: jy, k });
+          else if (h > 0.996) rocks.push({ x: jx, y: jy, k, big: false });
         } else {
-          if (h < 0.009) trees.push({ x: jx, y: jy, k, kind: 0 });
-          else if (h > 0.97) flowers.push({ x: jx, y: jy, k });
+          if (h < (inGrove ? 0.02 : 0.008)) trees.push({ x: jx, y: jy, k, kind: 0 });
+          else if (h > (inGrove ? 0.94 : 0.985)) flowers.push({ x: jx, y: jy, k });
         }
-        if (k < 0.05 && m > 0.28) bushSpots.push({ x: jx, y: jy });
+        if (inGrove ? k < 0.03 && m > 0.3 : k < 0.0012 && m > 0.4) bushSpots.push({ x: jx, y: jy });
       } else if (e >= LEVEL.HILL && e < LEVEL.PEAK) {
-        if (h < 0.06) rocks.push({ x: jx, y: jy, k, big: k > 0.6 });
+        if (h < 0.03) rocks.push({ x: jx, y: jy, k, big: k > 0.7 });
         else if (h > 0.96) trees.push({ x: jx, y: jy, k, kind: 1 });
       } else if (e >= LEVEL.PEAK) {
-        if (h < 0.05) rocks.push({ x: jx, y: jy, k, big: true });
+        if (h < 0.025) rocks.push({ x: jx, y: jy, k, big: true });
       } else if (e > LEVEL.WATER + 0.006 && e <= LEVEL.SAND + 0.02) {
         if (h < 0.012) rocks.push({ x: jx, y: jy, k, big: false });
       } else if (e > LEVEL.WATER - 0.03 && e <= LEVEL.WATER) {
@@ -270,9 +349,10 @@ export function scenery() {
       }
     }
   }
-  // keep bushes away from tree trunks
-  const bushes = bushSpots.filter(b => !trees.some(t => (t.x - b.x) * (t.x - b.x) + (t.y - b.y) * (t.y - b.y) < 30 * 30));
-  SCENERY = { trees, rocks, bushes, flowers, mushrooms, reeds };
+  // keep bushes away from tree trunks and off the islets
+  const near = (list, x, y, r) => list.some(t => (t.x - x) * (t.x - x) + (t.y - y) * (t.y - y) < r * r);
+  const bushes = bushSpots.filter(b => onMainland(b.x, b.y) && !near(trees, b.x, b.y, 30));
+  SCENERY = { trees, rocks, bushes, flowers, mushrooms, reeds, shrubs };
   return SCENERY;
 }
 
@@ -319,9 +399,21 @@ function randomLand(w, minElev, maxElev) {
   for (let tries = 0; tries < 500; tries++) {
     const x = 80 + rnd(w) * (WORLD_W - 160), y = 80 + rnd(w) * (WORLD_H - 160);
     const e = elevAt(x, y);
-    if (walkable(x, y) && e > minElev && e < maxElev) return [x, y];
+    if (onMainland(x, y) && e > minElev && e < maxElev) return [x, y];
   }
-  return [WORLD_W / 2, WORLD_H / 2];
+  const g = groves()[0];
+  return [g.x, g.y];
+}
+
+// somewhere walkable inside a grove
+function groveSpot(w, gi) {
+  const g = groves()[gi];
+  for (let tries = 0; tries < 200; tries++) {
+    const d = DIRS[rint(w, 0, 63)], r = rnd(w) * GROVE_R * 0.8;
+    const x = g.x + d[0] * r, y = g.y + d[1] * r;
+    if (onMainland(x, y)) return [x, y];
+  }
+  return [g.x, g.y];
 }
 
 function newCreature(w, s, x, y, genes, gen, parents, ageTicks) {
@@ -335,6 +427,7 @@ function newCreature(w, s, x, y, genes, gen, parents, ageTicks) {
     pn: parents ? [parents[0].n, parents[1].n] : null,
     kids: 0, st: ST.WANDER, tg: -1, cd: Math.floor(sp.cooldown * 0.5), sta: 40, stun: 0,
     ate: 0, kills: 0, born: w.tick - ageTicks, lt: 0, fat: rint(w, 0, AWAKE[s]),
+    hm: s === GRUMBLE ? rint(w, 0, groves().length - 1) : nearestGrove(x, y), dt: 0,
   };
   c.e = maxEnergy(c) * (parents ? 0.55 : 0.75);
   return c;
@@ -353,9 +446,10 @@ export function genesis() {
     const m = 3 + Math.floor(hash01(Math.floor(b.x), Math.floor(b.y), SEED + 9) * 3);
     w.bushes.push({ x: r4(b.x), y: r4(b.y), b: m, m });
   }
-  // founders: little herds so families start near each other
+  // founders: little herds in six of the groves, a few grumbles out in the wilds
   for (let herd = 0; herd < 6; herd++) {
-    const [hx, hy] = randomLand(w, LEVEL.SAND + 0.03, LEVEL.HILL - 0.05);
+    const gi = herd % groves().length;
+    const [hx, hy] = groveSpot(w, gi);
     const base = founderGenes(w, DUMPLING);
     for (let k = 0; k < 5; k++) {
       const g = base.slice();
@@ -364,7 +458,7 @@ export function genesis() {
       g[G_SIGHT] = r4(clamp(g[G_SIGHT] + rnorm(w) * 0.04, 0.6, 1.6));
       g[G_TOP] = rnd(w) < 0.3 ? rint(w, 0, 5) : g[G_TOP];
       let x = hx + rnorm(w) * 40, y = hy + rnorm(w) * 40;
-      if (!walkable(x, y)) { x = hx; y = hy; }
+      if (!onMainland(x, y)) { x = hx; y = hy; }
       w.creatures.push(newCreature(w, DUMPLING, x, y, g, 0, null, rint(w, 2400, 9000)));
     }
   }
@@ -392,7 +486,7 @@ export function cost(c) {
 }
 export function isAdult(c) { return c.age >= SPECIES[c.s].mature; }
 export function ready(c) {
-  return isAdult(c) && c.cd <= 0 && c.e > maxEnergy(c) * (c.s === DUMPLING ? 0.62 : 0.78) && c.age < c.life * 0.92;
+  return isAdult(c) && c.cd <= 0 && c.e > maxEnergy(c) * (c.s === DUMPLING ? 0.62 : 0.66) && c.age < c.life * 0.92;
 }
 
 // ---------------------------------------------------------------------------
@@ -401,28 +495,33 @@ export function ready(c) {
 const CELL = 120;
 const GW = Math.ceil(WORLD_W / CELL), GH = Math.ceil(WORLD_H / CELL);
 
-function buildGrid(list) {
-  const grid = new Array(GW * GH);
-  for (let i = 0; i < grid.length; i++) grid[i] = [];
-  for (let i = 0; i < list.length; i++) {
+// flat linked lists (head per cell, next per item), rebuilt every tick without allocating
+function buildGrid(list, grid) {
+  const n = list.length;
+  if (!grid || grid.next.length < n) grid = { head: new Int32Array(GW * GH), next: new Int32Array(Math.max(64, n * 2)) };
+  grid.head.fill(-1);
+  for (let i = n - 1; i >= 0; i--) { // backwards, so each cell lists its items in order
     const o = list[i];
     const gx = clamp(Math.floor(o.x / CELL), 0, GW - 1), gy = clamp(Math.floor(o.y / CELL), 0, GH - 1);
-    grid[gy * GW + gx].push(i);
+    const cell = gy * GW + gx;
+    grid.next[i] = grid.head[cell];
+    grid.head[cell] = i;
   }
   return grid;
 }
 function forNear(grid, list, x, y, r, fn) {
   const x0 = clamp(Math.floor((x - r) / CELL), 0, GW - 1), x1 = clamp(Math.floor((x + r) / CELL), 0, GW - 1);
   const y0 = clamp(Math.floor((y - r) / CELL), 0, GH - 1), y1 = clamp(Math.floor((y + r) / CELL), 0, GH - 1);
+  const head = grid.head, next = grid.next;
   for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) {
-    const cell = grid[gy * GW + gx];
-    for (let k = 0; k < cell.length; k++) fn(list[cell[k]]);
+    for (let k = head[gy * GW + gx]; k >= 0; k = next[k]) fn(list[k]);
   }
 }
+let CREATURE_GRID = null;
 
 let BUSH_GRID = null, BUSH_GRID_LIST = null;
 function bushGrid(w) {
-  if (BUSH_GRID_LIST !== w.bushes) { BUSH_GRID = buildGrid(w.bushes); BUSH_GRID_LIST = w.bushes; }
+  if (BUSH_GRID_LIST !== w.bushes) { BUSH_GRID = buildGrid(w.bushes, null); BUSH_GRID_LIST = w.bushes; }
   return BUSH_GRID;
 }
 
@@ -508,7 +607,7 @@ export function step(w, edits) {
   if (edits && edits.length) applyEdits(w, edits);
   const season = seasonIndex(tick);
   const list = w.creatures;
-  const grid = buildGrid(list);
+  const grid = (CREATURE_GRID = buildGrid(list, CREATURE_GRID));
   const bgrid = bushGrid(w);
   const byId = new Map();
   for (const c of list) byId.set(c.id, c);
@@ -602,6 +701,17 @@ export function step(w, edits) {
             if (d > 55 && d < 600) { steerTo(c, p.x, p.y, 0.25); c.st = ST.FOLLOW; acted = true; if (d < 80) spd *= 0.6; }
           }
         }
+        if (!acted && hungry && c.dt === 0) {
+          // they remember where the bushes are: head for the nearest one that still has berries
+          let best = null, bd = 900 * 900;
+          for (const b of w.bushes) {
+            if (b.b <= 0) continue;
+            const dx = b.x - c.x, dy = b.y - c.y, d = dx * dx + dy * dy;
+            if (d < bd) { bd = d; best = b; }
+          }
+          if (best) { wanderTurn(w, c, 2); steerTo(c, best.x, best.y + 6, 0.15); c.st = ST.FOOD; spd *= 0.85; acted = true; }
+        }
+        if (!acted && homeward(w, c, 420)) { acted = true; c.st = ST.WANDER; spd *= 0.55; }
         if (!acted) {
           c.st = ST.WANDER;
           wanderTurn(w, c, 3.2);
@@ -662,7 +772,7 @@ export function step(w, edits) {
             }
           }
         }
-        if (!acted && ready(c) && countG < sp.cap && countD > countG * 8) acted = seekMate(w, c, grid, list, dead, babies, fx, sight * 1.4);
+        if (!acted && ready(c) && countG < sp.cap && countD > countG * 8) acted = seekMate(w, c, grid, list, dead, babies, fx, 1100); // grumbles can smell each other from far away
         if (!acted && !isAdult(c) && c.pa >= 0) {
           const p = byId.get(c.pa) || byId.get(c.pb);
           if (p && !dead.has(p.id)) {
@@ -671,14 +781,20 @@ export function step(w, edits) {
           }
         }
         if (!acted) {
+          // roam from grove to grove, lingering a while at each
+          // grumbles that are ready for a family all head for the same grove (it changes every hour)
+          if (ready(c) && countG < sp.cap) c.hm = Math.floor(tick / 14400 + 3) * 5 % groves().length;
+          const g = groves()[c.hm];
+          const dx = g.x - c.x, dy = g.y - c.y;
+          if (dx * dx + dy * dy < GROVE_R * GROVE_R && rnd(w) < 1 / 2400) c.hm = rint(w, 0, groves().length - 1);
           c.st = ST.WANDER;
-          wanderTurn(w, c, 2.4);
+          if (!homeward(w, c, GROVE_R * 0.7)) wanderTurn(w, c, 2.4);
           spd *= 0.6;
         }
       }
     }
 
-    if (moving) move(w, c, spd);
+    if (moving && !move(w, c, spd) && c.dt === 0) c.dt = -1;
     else drainMul *= 0.55;
 
     // gentle separation from overlapping neighbours
@@ -716,6 +832,20 @@ export function step(w, edits) {
   recordHistory(w, false);
 
   if (tick % CHECKPOINT_TICKS === 0) normalize(w);
+}
+
+// Walk back towards the home grove when further than `far` from it. A creature
+// that bumps into water or cliffs on the way wanders off for a bit before trying again.
+function homeward(w, c, far) {
+  if (c.dt < 0) c.dt = 30 + rint(w, 0, 60);
+  if (c.dt > 0) { c.dt--; wanderTurn(w, c, 4); return true; }
+  const g = groves()[c.hm];
+  if (!g) return false;
+  const dx = g.x - c.x, dy = g.y - c.y;
+  if (dx * dx + dy * dy < far * far) return false;
+  wanderTurn(w, c, 2);
+  steerTo(c, g.x, g.y, 0.12);
+  return true;
 }
 
 // creatures nap on their own rhythm: awake time builds tiredness, sleep pays it back
@@ -834,7 +964,7 @@ function migrate(w) {
   if (ng === 0 && w.stats._gAlive !== false) { w.stats.extinctions[1]++; logEvent(w, 'extinct', 'The grumbles have died out.'); }
   w.stats._dAlive = nd > 0; w.stats._gAlive = ng > 0;
   if (nd < 5) {
-    const [x, y] = randomLand(w, LEVEL.SAND + 0.03, LEVEL.HILL - 0.05);
+    const [x, y] = groveSpot(w, rint(w, 0, groves().length - 1));
     const base = founderGenes(w, DUMPLING);
     for (let k = 0; k < 5; k++) {
       const g = base.slice(); g[G_SIZE] = r4(clamp(g[G_SIZE] + rnorm(w) * 0.05, 0.6, 1.6));
@@ -862,7 +992,7 @@ function migrate(w) {
 // decided only from the edit itself and the time ntfy stamped on it, so
 // everyone agrees.
 
-export const EDIT_TOPIC = 'wigglewood-edits-v2-m4t7x9';
+export const EDIT_TOPIC = 'wigglewood-edits-v3-q8r2k5';
 export const EDIT_URL = `https://ntfy.sh/${EDIT_TOPIC}`;
 export const EDIT_DELAY = 12; // ticks between sending an edit and it happening (3 s)
 export const EDITS_PER_MINUTE = 40; // island-wide, so nobody can wipe it out in one go
@@ -909,7 +1039,8 @@ function applyEdit(w, e) {
   if (e.k === 'move') {
     // picked up and put down somewhere else (only onto solid ground)
     if (!walkable(e.x, e.y)) return false;
-    c.x = e.x; c.y = e.y; c.st = ST.STUN; c.stun = 8; c.tg = -1;
+    c.x = e.x; c.y = e.y; c.st = ST.STUN; c.stun = 8; c.tg = -1; c.dt = 0;
+    if (c.s === DUMPLING) c.hm = nearestGrove(c.x, c.y);
     w.fx.push({ k: 'dropped', id: c.id, x: c.x, y: c.y });
     return true;
   }
