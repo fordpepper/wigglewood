@@ -351,7 +351,9 @@ function frame(now) {
 function viewParams(z = app.cam.z) {
   const s = z * app.dpr * PX;
   let L = 0;
-  while (L < T.MAX_LEVEL && s * (1 << L) < 0.999) L++;
+  // an art pixel is at least two device pixels (except at the coarsest level),
+  // which keeps the number of ground tiles on screen small
+  while (L < T.MAX_LEVEL && s * (1 << L) < 1.999) L++;
   return { L, k: s * (1 << L), u: 1 / (PX << L) };
 }
 function snapZoom(z) {

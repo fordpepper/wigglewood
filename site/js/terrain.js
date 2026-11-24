@@ -45,7 +45,7 @@ export function seaColor(season) {
 }
 
 const cache = new Map();
-const MAX_TILES = 110;
+let maxTiles = 110; // grows to fit the view, so tiles on screen never evict each other
 let queue = [];
 const queued = new Set();
 const key = (season, L, tx, ty) => `${season}|${L}|${tx}|${ty}`;
@@ -60,7 +60,10 @@ export function renderTile(season, L, tx, ty) {
   const M = 4, N = TILE + M * 2;
   const E = new Float32Array(N * N);
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    E[j * N + i] = S.sampleField(elev, wx0 + (i - M + 0.5) * ps, wy0 + (j - M + 0.5) * ps);
+    const x = wx0 + (i - M + 0.5) * ps, y = wy0 + (j - M + 0.5) * ps;
+    // past the edge of the world the sea keeps getting deeper (no smeared edge rows)
+    const out = Math.max(0, -x, x - S.WORLD_W) + Math.max(0, -y, y - S.WORLD_H);
+    E[j * N + i] = S.sampleField(elev, x, y) - out / 150;
   }
   const MS = 8, MN = TILE / MS + 2;
   const Mo = new Float32Array(MN * MN);
@@ -211,6 +214,15 @@ export function getTile(season, L, tx, ty, request) {
   return null;
 }
 
+// least recently used first, but the coarsest level always stays: it is the
+// fallback whenever anything else is missing
+function evict() {
+  for (const k of cache.keys()) {
+    if (cache.size <= maxTiles) return;
+    if (!k.includes(`|${MAX_LEVEL}|`)) cache.delete(k);
+  }
+}
+
 export function pumpTiles(budgetMs) {
   const t0 = performance.now();
   while (queue.length && performance.now() - t0 < budgetMs) {
@@ -218,7 +230,7 @@ export function pumpTiles(budgetMs) {
     queued.delete(k);
     if (cache.has(k)) continue;
     cache.set(k, renderTile(season, L, tx, ty));
-    while (cache.size > MAX_TILES) cache.delete(cache.keys().next().value);
+    evict();
   }
   return queue.length;
 }
@@ -230,6 +242,7 @@ export function drawGround(ctx, season, L, view) {
   const tx0 = Math.max(0, Math.floor(view.x0 / TILE)), ty0 = Math.max(0, Math.floor(view.y0 / TILE));
   const wpx = S.WORLD_W / (PX << L), hpx = S.WORLD_H / (PX << L);
   const tx1 = Math.min(Math.ceil(wpx / TILE) - 1, Math.floor(view.x1 / TILE)), ty1 = Math.min(Math.ceil(hpx / TILE) - 1, Math.floor(view.y1 / TILE));
+  maxTiles = Math.max(maxTiles, (tx1 - tx0 + 1) * (ty1 - ty0 + 1) * 2 + 60);
   let missing = 0;
   for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
     const t = getTile(season, L, tx, ty, true);
