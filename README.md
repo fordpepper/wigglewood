@@ -18,13 +18,20 @@ the same places. No accounts, no server, just GitHub.
   IEEE-754 pins down exactly (`+ - * /`, `sqrt`, integer ops), its own seeded RNG
   and its own sine, so Node and every browser compute bit-identical results.
   One tick is 250 ms of real time, counted from the world's founding (`EPOCH_MS`).
-- Every 15 minutes a GitHub Action (`.github/workflows/world.yml`) loads the last
-  checkpoint from the `state` branch, simulates up to the latest 30-minute
-  boundary, saves the new checkpoint and publishes the site to GitHub Pages.
-- Your browser downloads that checkpoint and simulates the remaining minutes
-  itself, then keeps running in real time. State is round-tripped through JSON at
-  every checkpoint, so a browser that started from an older checkpoint follows
-  exactly the same path as the Action.
+- A GitHub Action, the heartbeat (`.github/workflows/heartbeat.yml`), loads the
+  last checkpoint from the `state` branch every 30 minutes, simulates up to the
+  current 30-minute boundary and force-pushes the new checkpoint (one commit, so
+  the branch never grows). Each heartbeat run lasts about five and a half hours
+  and then starts its successor; a cron entry and every push to `main` restart
+  the chain if it ever breaks.
+- Your browser reads that checkpoint straight from the `state` branch (via
+  raw.githubusercontent.com), simulates the remaining minutes itself, and then
+  keeps running in real time. State is round-tripped through JSON at every
+  checkpoint, so a browser that started from an older checkpoint follows exactly
+  the same path as the Action. Browsers also keep their own latest checkpoint
+  so returning visitors load fast, and they compare checksums with GitHub's
+  checkpoints to catch any drift.
+- Pushing to `main` publishes the page to GitHub Pages (`world.yml`).
 - Day and night follow the viewer's own clock (that part is only drawn, not
   simulated, so the shared world is the same in every timezone). Seasons belong
   to the island: each one lasts three real hours.
@@ -48,8 +55,9 @@ only; the world itself is unaffected).
 
 ## Changing the rules
 
-Any change to `site/sim/core.js` changes the world's future and makes old
-checkpoints incompatible. Bump `SIM_VERSION` when you do: the Action will then
-rebuild the world from its founding moment.
+Any change to `site/sim/core.js` changes the world's future from the next
+checkpoint on (the heartbeat notices new code on `main` and restarts with it).
+If a change makes old checkpoints unreadable, bump `SIM_VERSION`: the world is
+then rebuilt from its founding moment, which takes longer the older it is.
 
 Font: [Comic Neue](https://github.com/crozynski/comicneue) (SIL Open Font License).
