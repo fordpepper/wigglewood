@@ -32,6 +32,16 @@ the same places. No accounts, no server, just GitHub.
   so returning visitors load fast, and they compare checksums with GitHub's
   checkpoints to catch any drift.
 - Pushing to `main` publishes the page to GitHub Pages (`world.yml`).
+- **Visitor edits** (zap, feed, drop in a creature, refill a bush) are posted to
+  a public [ntfy.sh](https://ntfy.sh) topic, so nobody needs an account. Each edit
+  names the tick it takes effect on, three seconds ahead, and whether it counts
+  is decided only from the edit and ntfy's timestamp, so every browser and the
+  heartbeat apply exactly the same edits at the same moment. A browser that hears
+  about an edit late rewinds to a snapshot from a few seconds earlier and replays.
+  The island accepts at most 40 edits a minute in total. Anyone can post to the
+  topic, so the island can be messed with; that is the price of no logins.
+- Slow devices switch to a light mode automatically (1x pixels, 30 fps, fewer
+  effects). `?quality=low` or `?quality=high` forces one.
 - Day and night follow the viewer's own clock (that part is only drawn, not
   simulated, so the shared world is the same in every timezone). Seasons belong
   to the island: each one lasts three real hours.
